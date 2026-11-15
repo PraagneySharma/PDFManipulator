@@ -1,0 +1,45 @@
+# Local Python environment and generated artifacts
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage/
+build/
+dist/
+*.spec
+*.log
+*.tmp
+
+# Personal documents and application state
+*.pdf
+*.dpapi
+accounts.dpapi
+recipes.json
+host.json
+*.sqlite
+*.sqlite3
+*.db
+*.bak
+Thumbs.db
+.DS_Store
+
+# Credentials and private configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+*.key
+id_rsa*
+id_ed25519*
+*.credentials
+credentials.json
+secrets.json
+token.json
+.vscode/
+.idea/
