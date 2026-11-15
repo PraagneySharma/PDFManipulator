@@ -14,9 +14,9 @@ def _smoke_test() -> None:
     from tempfile import TemporaryDirectory
 
     from pypdf import PdfReader, PdfWriter
-    from studio.recipes import preset
-    from studio.ui import StudioApp
-    from studio.engine import execute_workflow
+    from pdfmanipulator.recipes import preset
+    from pdfmanipulator.ui import StudioApp
+    from pdfmanipulator.engine import execute_workflow
 
     with TemporaryDirectory() as dirname:
         folder = Path(dirname)
@@ -56,7 +56,7 @@ def run() -> None:
         if len(sys.argv) > 1 and sys.argv[1] == "--smoke-test":
             _smoke_test()
         else:
-            from studio.ui import main
+            from pdfmanipulator.ui import main
             main()
     except Exception as exc:
         if len(sys.argv) > 1 and sys.argv[1] == "--smoke-test":

@@ -1,7 +1,7 @@
 @echo off
 setlocal
-cd /d "%~dp0"
-title Automatic Duplex Scanning
+cd /d "%~dp0.."
+title Legacy Duplex Scanner
 
 if not exist ".venv\Scripts\python.exe" (
     echo Setting up Automatic Duplex Scanning for the first time...
@@ -19,7 +19,7 @@ if errorlevel 1 (
     if errorlevel 1 goto :install_error
 )
 
-".venv\Scripts\python.exe" app.py
+".venv\Scripts\python.exe" legacy\duplex_app.py
 if errorlevel 1 (
     echo.
     echo The application exited with an error.

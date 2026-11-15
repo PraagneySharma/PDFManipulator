@@ -24,7 +24,7 @@ class CLITests(unittest.TestCase):
                 "name":"every two","pattern":"chunk_{index:02d}",
                 "steps":[{"op":"load","source":"input1"},{"op":"split_every","n":2}]}),
                 encoding="utf-8")
-            cmd=[sys.executable,"-m","studio.cli","--recipe",str(recipe),
+            cmd=[sys.executable,"-m","pdfmanipulator.cli","--recipe",str(recipe),
                  "--input",f"input1={scan}","--output-dir",str(out)]
             preview=subprocess.run(cmd+["--preview"],capture_output=True,text=True)
             self.assertEqual(preview.returncode,0,preview.stderr)

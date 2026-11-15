@@ -5,10 +5,10 @@ import tempfile
 import unittest
 
 from pypdf import PdfWriter, PdfReader
-from studio.engine import WorkflowError
+from pdfmanipulator.engine import WorkflowError
 
 try:
-    from studio.mcp_server import make_server
+    from pdfmanipulator.mcp_server import make_server
     import mcp
     AVAILABLE = True
 except ImportError:

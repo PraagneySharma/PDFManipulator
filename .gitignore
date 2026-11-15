@@ -43,3 +43,6 @@ secrets.json
 token.json
 .vscode/
 .idea/
+
+# Build script generates this icon; do not commit a duplicate binary.
+packaging/pdf_manipulator.ico

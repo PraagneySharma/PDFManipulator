@@ -7,8 +7,8 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from studio.chatgpt import ChatGPTConnection
-from studio.recipes import preset, read_recipes, store_path
+from pdfmanipulator.chatgpt import ChatGPTConnection
+from pdfmanipulator.recipes import preset, read_recipes, store_path
 
 
 class RenameStorageTests(unittest.TestCase):

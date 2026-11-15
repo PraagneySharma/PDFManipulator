@@ -1,4 +1,4 @@
-"""CLI for automation; run python -m studio.cli --help."""
+"""CLI for automation; run python -m pdfmanipulator.cli --help."""
 from __future__ import annotations
 import argparse
 import json
@@ -22,7 +22,7 @@ def main() -> None:
         sources = dict(pair.split("=", 1) for pair in args.input)
         pattern = args.pattern or recipe.get("pattern", "{source}_{index:02d}")
         compilation = compile_workflow(recipe["steps"], sources)
-        names = __import__("studio.engine", fromlist=["output_names"]).output_names(compilation, pattern)
+        names = __import__("pdfmanipulator.engine", fromlist=["output_names"]).output_names(compilation, pattern)
         if args.preview:
             for name, doc in zip(names, compilation.documents):
                 print(f"{name}: {len(doc.pages)} pages")

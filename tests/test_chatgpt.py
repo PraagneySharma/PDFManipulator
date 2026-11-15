@@ -14,7 +14,7 @@ from urllib.request import urlopen
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
-from studio.chatgpt import (
+from pdfmanipulator.chatgpt import (
     APP_NAME, ChatGPTConnection, ChatGPTError, DISCOVERY, ISSUER,
     MODELS, RESPONSES, TOKEN_ENDPOINT, _b64encode, _validate_id_token
 )
@@ -81,7 +81,7 @@ class ChatGPTProtocolTests(unittest.TestCase):
         return True
 
     def connect(self):
-        with patch("studio.chatgpt._http_json", side_effect=self.fake_request):
+        with patch("pdfmanipulator.chatgpt._http_json", side_effect=self.fake_request):
             info = self.client.sign_in(launch=self.simulated_browser, timeout=5)
             models = self.client.models()
         return info, models
@@ -110,14 +110,14 @@ class ChatGPTProtocolTests(unittest.TestCase):
 
     def test_signin_identity_nonce_mismatch_rejected(self):
         self.nonce = "correct"
-        with patch("studio.chatgpt._http_json", side_effect=self.fake_request):
+        with patch("pdfmanipulator.chatgpt._http_json", side_effect=self.fake_request):
             with self.assertRaisesRegex(ChatGPTError, "verification failed"):
                 _validate_id_token(self.jwt("wrong"),
                                    client_id="oaiapp_mock", nonce="correct")
 
     def test_pkce_reconnect_reuses_client_id_and_host(self):
         self.connect()
-        with patch("studio.chatgpt._http_json", side_effect=self.fake_request):
+        with patch("pdfmanipulator.chatgpt._http_json", side_effect=self.fake_request):
             self.client.sign_in(launch=self.simulated_browser, timeout=5)
         p = parse_qs(urlsplit(self.auth_url).query)
         self.assertEqual(p["client_id"], ["oaiapp_mock"])
@@ -131,7 +131,7 @@ class ChatGPTProtocolTests(unittest.TestCase):
         active = self.client.store.active()
         active["expires_at"] = time.time() - 1
         self.client.store.upsert(active)
-        with patch("studio.chatgpt._http_json", side_effect=self.fake_request):
+        with patch("pdfmanipulator.chatgpt._http_json", side_effect=self.fake_request):
             self.assertEqual(self.client._access_token(), "rotated-access")
         self.assertEqual(self.client.store.active()["refresh_token"], "rotated-refresh")
 
@@ -148,7 +148,7 @@ class ChatGPTProtocolTests(unittest.TestCase):
             args.update(json.loads(req.data))
             self.assertEqual(req.get_header("Authorization"), "Bearer initial-access")
             return io.BytesIO(events)
-        with patch("studio.chatgpt.urlopen", side_effect=fake_stream):
+        with patch("pdfmanipulator.chatgpt.urlopen", side_effect=fake_stream):
             steps = self.client.interpret("Split in groups of three", ["input1"], consent=True)
         self.assertEqual(steps[-1]["n"], 3)
         self.assertIs(args["stream"], True)
@@ -160,7 +160,7 @@ class ChatGPTProtocolTests(unittest.TestCase):
     def test_inference_fails_closed_when_stream_does_not_complete(self):
         self.connect()
         events = b'data: {"type":"response.output_text.delta","delta":"{}"}\n\n'
-        with patch("studio.chatgpt.urlopen", return_value=io.BytesIO(events)):
+        with patch("pdfmanipulator.chatgpt.urlopen", return_value=io.BytesIO(events)):
             with self.assertRaisesRegex(ChatGPTError, "completed response"):
                 self.client.interpret("Split every 2", ["input1"], consent=True)
         with self.assertRaisesRegex(ChatGPTError, "Allow sending"):
@@ -177,7 +177,7 @@ class ChatGPTProtocolTests(unittest.TestCase):
 
     def test_signout_clears_local_tokens_and_keeps_registration(self):
         self.connect()
-        with patch("studio.chatgpt._http_json", side_effect=self.fake_request):
+        with patch("pdfmanipulator.chatgpt._http_json", side_effect=self.fake_request):
             self.assertFalse(self.client.sign_out())  # Mock has no revocation route.
         session = self.client.session()
         self.assertFalse(session["connected"])

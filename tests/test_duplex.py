@@ -6,7 +6,7 @@ import unittest
 
 from pypdf import PdfReader, PdfWriter
 
-from app import DuplexError, merge_duplex, page_counts
+from legacy.duplex_app import DuplexError, merge_duplex, page_counts
 
 
 class DuplexMergeTests(unittest.TestCase):

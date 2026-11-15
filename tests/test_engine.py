@@ -5,9 +5,9 @@ import threading
 import unittest
 
 from pypdf import PdfWriter, PdfReader
-from studio.engine import WorkflowError, compile_workflow, execute_workflow, output_names
-from studio.parser import interpret
-from studio.recipes import preset, read_recipes, save_recipes
+from pdfmanipulator.engine import WorkflowError, compile_workflow, execute_workflow, output_names
+from pdfmanipulator.parser import interpret
+from pdfmanipulator.recipes import preset, read_recipes, save_recipes
 
 
 class WorkflowTests(unittest.TestCase):

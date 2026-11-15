@@ -2,8 +2,8 @@
 import tempfile
 from pathlib import Path
 from pypdf import PdfWriter
-from studio.ui import StudioApp
-from studio.recipes import preset
+from pdfmanipulator.ui import StudioApp
+from pdfmanipulator.recipes import preset
 
 def make(path, numbers):
     w = PdfWriter()
