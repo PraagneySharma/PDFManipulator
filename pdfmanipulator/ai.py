@@ -10,17 +10,23 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
 from .engine import WorkflowError, validate_steps
-from .parser import interpret
+from .parser import interpret, two_pdf_request
 
 SYSTEM_PROMPT = """Translate the user's PDF instruction into a JSON object with a 'steps' array.
 No code, no markdown, no comments. A step is an object with 'op' and parameters.
 Allowed operations: load(source), load_each(sources), merge(sources),
+insert_pdf(source,position,document),
 duplex(fronts,backs,reverse_backs,rotate_backs,skip_first_back),
 interleave(sources,reverse_second), split_every(n),
 split_ranges(ranges,include_remaining), extract(pages), delete(pages),
 reorder(order), reverse(), rotate(pages,degrees), duplicate(pages,times),
 remove_blanks(threshold).
-First step must load/merge/duplex/interleave/load_each. Use 1-based page
+First step must load/merge/duplex/interleave/load_each. After deleting pages,
+use insert_pdf to insert another PDF into the current document. The position
+is 1 for the beginning or 'end' to append. Never use merge() after the first
+step. Preserve ALL user-requested operations in order: for example, deleting
+page 1 of input1 then putting input2 first requires load(input1), delete(1),
+insert_pdf(input2,position=1). Use 1-based page
 numbers and selections like '1,3,5-7' or 'even', 'odd', 'all'. If the user
 asks to rotate all even pages, choose pages='even'. For multiple input files
 use their exact aliases (input1, input2, etc). Do not invent source paths.
@@ -45,6 +51,9 @@ def _post(url: str, payload: dict, headers: dict[str, str]) -> dict:
 def translate(prompt: str, aliases: list[str], provider: str = "offline", *, consent: bool = False, model: str | None = None) -> list[dict]:
     if provider == "offline":
         return interpret(prompt, aliases)
+    deterministic = two_pdf_request(prompt, aliases)
+    if deterministic is not None:
+        return deterministic
     if not consent:
         raise WorkflowError("Confirm permission before sending a prompt to an AI provider.")
     if len(prompt) > 2000 or not prompt.strip():

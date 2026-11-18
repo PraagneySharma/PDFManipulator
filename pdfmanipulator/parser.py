@@ -3,6 +3,51 @@ from __future__ import annotations
 import re
 from .engine import WorkflowError, validate_steps
 
+def two_pdf_request(prompt: str, aliases: list[str]) -> list[dict] | None:
+    """Handle ordered, multi-step instructions without silently dropping clauses.
+
+    Input2 is inserted as a complete PDF; its first page becomes output page 1
+    when the user asks for the second document first.
+    """
+    if len(aliases) < 2:
+        return None
+    words = re.sub(r"\s+", " ", prompt.lower()).strip()
+    refers_second = bool(re.search(r"\b(?:second|2nd)\s+(?:pdf|file|document)\b", words))
+    has_add = bool(re.search(r"\b(?:add|insert|append|merge|combine|join|put|place)\b", words))
+    if not (refers_second and has_add):
+        return None
+    wants_first = bool(
+        re.search(r"\b(?:second|2nd)\s+(?:pdf|file|document)\b.{0,85}"
+                  r"(?:\b(?:first|page\s*(?:1|one)|start|beginning|before)\b)", words)
+        or re.search(r"\b(?:first|start|beginning)\b.{0,55}"
+                     r"\b(?:second|2nd)\s+(?:pdf|file|document)\b", words)
+    )
+    # Isolate delete clauses from 'second PDF is page 1' so that unrelated
+    # page numbers are never mistaken for a page-to-delete instruction.
+    delete_clauses = re.findall(
+        r"\b(?:delete|remove|discard)\b(.{0,140}?)(?=[.!?]|\b(?:add|insert|append|merge|combine|join|put|place)\b|$)",
+        words
+    )
+    delete_page = None
+    for clause in delete_clauses:
+        first_page = re.search(r"\b(?:first|1st)\s+page\b", clause)
+        explicit_page = re.search(r"\bpage\s*(\d+)\b", clause)
+        if first_page:
+            delete_page = "1"
+        elif explicit_page:
+            delete_page = explicit_page[1]
+        else:
+            raise WorkflowError("Specify which page to delete from the first PDF.")
+        if re.search(r"\b(?:second|2nd)\s+(?:pdf|file|document)\b", clause):
+            raise WorkflowError("Specify a deletion from the first PDF before combining documents.")
+    steps = [{"op": "load", "source": aliases[0]}]
+    if delete_page is not None:
+        steps.append({"op": "delete", "pages": delete_page})
+    steps.append({"op": "insert_pdf", "source": aliases[1],
+                  "position": 1 if wants_first else "end"})
+    return validate_steps(steps)
+
+
 def interpret(prompt: str, aliases: list[str]) -> list[dict]:
     """Parse a constrained, useful subset of English into safe operation dictionaries."""
     if not prompt.strip() or len(prompt) > 2000:
@@ -15,6 +60,9 @@ def interpret(prompt: str, aliases: list[str]) -> list[dict]:
                          "nine": 9, "ten": 10}.items():
         words = re.sub(r"\bevery\s+" + word + r"(?=\s+pages?\b)",
                        f"every {number}", words)
+    special = two_pdf_request(prompt, aliases)
+    if special is not None:
+        return special
     source = aliases[0] if aliases else "input1"
     base = [{"op": "load", "source": source}]
     steps: list[dict] = []

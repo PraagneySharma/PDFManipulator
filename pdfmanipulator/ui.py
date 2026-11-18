@@ -9,6 +9,7 @@ from pathlib import Path
 import json
 import webbrowser
 import threading
+from queue import Empty, Queue
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
@@ -19,7 +20,9 @@ from PIL import Image
 from .ai import translate
 from .chatgpt import ChatGPTConnection, ChatGPTError, USAGE_URL
 from .engine import Compilation, PageRef, WorkflowError, compile_workflow, execute_workflow, output_names, validate_steps
+from .exports import next_available_pattern
 from .parser import EXAMPLES
+from .layout import thumbnail_layout
 from .previews import image_for
 from .recipes import PRESETS, export_recipe, import_recipe, preset, read_recipes, save_recipes, validate_recipe
 
@@ -43,22 +46,39 @@ HOVER = ("#2966cd", "#3976e0")
 CANVAS_BG = ("#f4f6fa", "#111723")
 
 OP_DEFAULTS = {
+    "merge": {"sources": ["input1", "input2"]},
     "split_every": {"n": 3},
     "split_ranges": {"ranges": ["1-5"], "include_remaining": True},
     "extract": {"pages": "1"},
     "delete": {"pages": "1"},
+    "insert_pdf": {"source": "input2", "position": 1},
     "reverse": {},
     "rotate": {"pages": "even", "degrees": 180},
     "duplicate": {"pages": "1", "times": 1},
     "remove_blanks": {"threshold": 0.003},
     "reorder": {"order": []},
 }
+STEP_OPTIONS = {
+    "Merge PDFs (all inputs)": "merge",
+    "Insert / append PDF": "insert_pdf",
+    "Split every N pages": "split_every",
+    "Split into ranges": "split_ranges",
+    "Extract pages": "extract",
+    "Delete pages": "delete",
+    "Reverse page order": "reverse",
+    "Rotate pages": "rotate",
+    "Duplicate pages": "duplicate",
+    "Remove blank pages": "remove_blanks",
+    "Reorder pages": "reorder",
+}
+
 
 def describe(step: dict) -> str:
     op = step["op"]
     descriptions = {
         "load": f"Open {step.get('source')}",
         "merge": "Join " + ", ".join(step.get("sources", [])),
+        "insert_pdf": f"Insert all pages from {step.get('source')} at position {step.get('position')}",
         "load_each": "Batch each input file independently",
         "duplex": f"Interleave {step.get('fronts')} + {step.get('backs')}" +
                   ("  ·  reverse backs" if step.get("reverse_backs", True) else "") +
@@ -96,6 +116,11 @@ class StepDialog(ctk.CTkToplevel):
         container = ctk.CTkScrollableFrame(self, fg_color="transparent")
         container.grid(row=1, column=0, padx=16, sticky="nsew")
         self.grid_rowconfigure(1, weight=1)
+        if self.step["op"] in ("insert_pdf", "merge"):
+            sources = ", ".join(f"{key} = {value.name}" for key, value in parent.sources.items())
+            ctk.CTkLabel(container, text="Available PDFs: " + (sources or "Add PDFs first"),
+                         text_color=MUTED, font=F(11), wraplength=390,
+                         justify="left").pack(anchor="w", pady=(4, 8))
         for key, value in self.step.items():
             if key == "op":
                 continue
@@ -107,7 +132,7 @@ class StepDialog(ctk.CTkToplevel):
             entry.insert(0, hint)
             entry.pack(fill="x")
             self.entries[key] = entry
-        ctk.CTkLabel(self, text="Page selections: 1,3,5-7 · even · odd · all. Lists use JSON.",
+        ctk.CTkLabel(self, text="Pages: 1,3,5-7 / even / odd / all. Insert position: 1 or end. Lists: JSON.",
                      text_color=MUTED, font=F(11)).grid(row=2, column=0, pady=8)
         ctk.CTkButton(self, text="Apply changes", command=self.commit,
                       font=F(13, "bold"), fg_color=ACCENT, height=40).grid(
@@ -124,7 +149,7 @@ class StepDialog(ctk.CTkToplevel):
                         raise WorkflowError(f"{key} must be true or false.")
                     value = text.lower() == "true"
                 elif isinstance(old, int):
-                    value = int(text)
+                    value = "end" if key == "position" and text.lower() == "end" else int(text)
                 elif isinstance(old, float):
                     value = float(text)
                 elif isinstance(old, list):
@@ -160,11 +185,16 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         self.active_document = 0
         self.page_offset = 0
         self.zoom_scale = 1.0
+        self.zoom_var = tk.StringVar(value="100%")
+        self.files_summary_var = tk.StringVar(value="No PDFs imported yet")
+        self._page_resize_job = None
+        self._rendered_area_width = 0
         self.selected_page: int | None = None
         self.drag_page: int | None = None
         self.undo_stack: list[list[dict]] = []
         self.redo_stack: list[list[dict]] = []
         self.busy = False
+        self._ui_queue = Queue()
         self.cancel = threading.Event()
         self.image_refs: list[ctk.CTkImage] = []
         self.filename_pattern = tk.StringVar(value="{source}_{index:02d}")
@@ -186,12 +216,31 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         self._populate_recipes()
         self._populate_sources()
         self._populate_steps()
+        self._update_import_banner()
         self._setup_drop()
         self._bind_shortcuts()
+        self.after(40, self._drain_ui_events)
         self._sync_chatgpt_ui()
         if self.chatgpt and self.chatgpt.session()["sharing"]:
             self.after(180, self._load_chatgpt_models)
         self.after(100, self.preview)
+
+    def _dispatch_ui(self, callback):
+        """Queue UI callbacks without invoking Tkinter from a worker thread."""
+        self._ui_queue.put(callback)
+
+    def _drain_ui_events(self):
+        for _ in range(100):
+            try:
+                callback = self._ui_queue.get_nowait()
+            except Empty:
+                break
+            try:
+                callback()
+            except Exception as exc:
+                self.status_var.set(f"UI operation failed: {str(exc)[:120]}")
+        if self.winfo_exists():
+            self.after(40, self._drain_ui_events)
 
     def _create_layout(self):
         """Preview-first desktop layout; advanced controls live in a drawer."""
@@ -214,10 +263,13 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
                      text_color=TEXT).pack(anchor="w")
         ctk.CTkLabel(brand, text="WORKFLOWS / LOCAL", font=F(10, "bold"),
                      text_color=MUTED).pack(anchor="w")
-        self.run_button = ctk.CTkButton(header, text="Export PDF", width=130, height=39,
+        self.run_button = ctk.CTkButton(header, text="Save as PDF", width=130, height=39,
                                         fg_color=ACCENT, hover_color=HOVER,
                                         font=F(13, "bold"), command=self.run)
         self.run_button.pack(side="right", padx=(10, 0))
+        ctk.CTkButton(header, text="+ New workflow", width=136, height=39,
+                      fg_color=BTN, text_color=TEXT, hover_color=CARD,
+                      font=F(13), command=self.new_workflow).pack(side="right", padx=5)
         self.drawer_button = ctk.CTkButton(header, text="Edit workflow", width=133, height=39,
                                            fg_color=BTN, text_color=TEXT,
                                            hover_color=CARD, font=F(13),
@@ -357,6 +409,14 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
             font=F(11), text_color=MUTED)
         self.ai_privacy_label.pack(anchor="w", padx=13, pady=(3, 10))
         self.ai_settings_visible = False
+        self.file_banner = ctk.CTkFrame(composer, fg_color=CARD, corner_radius=8)
+        self.file_banner.grid(row=5, column=0, sticky="ew", padx=22, pady=(0, 12))
+        ctk.CTkLabel(self.file_banner, textvariable=self.files_summary_var,
+                     text_color=TEXT, font=F(11), anchor="w",
+                     justify="left", wraplength=750).pack(side="left", fill="x", expand=True, padx=12, pady=8)
+        ctk.CTkButton(self.file_banner, text="Clear inputs", width=88, height=27,
+                      fg_color=BTN, text_color=TEXT, font=F(11),
+                      command=self.clear_files).pack(side="right", padx=9, pady=5)
         suggestion = ctk.CTkFrame(self.mainpane, fg_color="transparent")
         suggestion.grid(row=1, column=0, sticky="ew", pady=(0, 11))
         ctk.CTkLabel(suggestion, text="Try", text_color=MUTED,
@@ -384,9 +444,9 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
                           fg_color=BTN, hover_color=CARD, text_color=TEXT,
                           font=F(14, "bold"),
                           command=lambda d=delta: self.change_zoom(d)).pack(side="right", padx=3)
-        ctk.CTkLabel(toolbar, text="Zoom", font=F(11),
-                     text_color=MUTED).pack(side="right", padx=(8, 6))
-        ctk.CTkButton(toolbar, text="Delete", width=62, height=30,
+        ctk.CTkLabel(toolbar, textvariable=self.zoom_var, font=F(11),
+                     text_color=MUTED, width=40).pack(side="right", padx=(8, 6))
+        ctk.CTkButton(toolbar, text="Delete page", width=83, height=30,
                       fg_color=BTN, hover_color=CARD, text_color=TEXT,
                       font=F(11), command=self.delete_selected_page).pack(side="right", padx=4)
         ctk.CTkButton(toolbar, text="Rotate", width=62, height=30,
@@ -406,6 +466,7 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         self.page_list = ctk.CTkScrollableFrame(canvas, fg_color=CANVAS_BG,
                                                  corner_radius=9)
         self.page_list.grid(row=4, column=0, sticky="nsew", padx=17, pady=(0, 6))
+        canvas.bind("<Configure>", self._on_preview_resize)
         page_nav = ctk.CTkFrame(canvas, fg_color="transparent")
         page_nav.grid(row=5, column=0, sticky="ew", padx=20, pady=(5, 15))
         self.prev_btn = ctk.CTkButton(page_nav, text="Previous", width=98, height=31,
@@ -452,13 +513,16 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         self.step_frame.pack(fill="x")
         addrow = ctk.CTkFrame(self.inspector, fg_color="transparent")
         addrow.pack(fill="x", pady=(12, 8))
-        self.add_op = ctk.CTkOptionMenu(addrow, values=list(OP_DEFAULTS),
+        self.add_op = ctk.CTkOptionMenu(addrow, values=list(STEP_OPTIONS),
                                         fg_color=BTN, button_color=BORDER,
                                         text_color=TEXT, font=F(12), width=172)
         self.add_op.pack(side="left", fill="x", expand=True)
         ctk.CTkButton(addrow, text="+ Step", width=74, height=33,
                       font=F(12), fg_color=ACCENT, command=self.add_step).pack(
                           side="right", padx=(8, 0))
+        ctk.CTkButton(self.inspector, text="+ Insert PDF at position 1",
+                      fg_color=BTN, text_color=TEXT, font=F(12), height=32,
+                      command=lambda: self.add_step("insert_pdf")).pack(fill="x", pady=(0, 10))
         actions = ctk.CTkFrame(self.inspector, fg_color="transparent")
         actions.pack(fill="x", pady=(3, 21))
         for label, cmd in (("Undo", self.undo), ("Redo", self.redo),
@@ -604,10 +668,10 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
                         models = self.chatgpt.models()
                     except ChatGPTError as exc:
                         model_error = str(exc)
-                self.after(0, lambda: self._chatgpt_signed_in(session, models, model_error))
+                self._dispatch_ui( lambda: self._chatgpt_signed_in(session, models, model_error))
             except Exception as exc:
                 msg = str(exc)
-                self.after(0, lambda: self._chatgpt_connect_error(msg))
+                self._dispatch_ui( lambda: self._chatgpt_connect_error(msg))
         threading.Thread(target=work, daemon=True).start()
 
     def _chatgpt_signed_in(self, session: dict, models: list[dict], model_error: str):
@@ -669,13 +733,13 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         def work():
             try:
                 models = self.chatgpt.models()
-                self.after(0, lambda: self._show_chatgpt_models(models))
+                self._dispatch_ui( lambda: self._show_chatgpt_models(models))
             except Exception as exc:
                 msg = str(exc)
-                self.after(0, lambda: self.status_var.set(
+                self._dispatch_ui( lambda: self.status_var.set(
                     "Could not load ChatGPT models: " + msg[:100]))
             finally:
-                self.after(0, lambda: setattr(self, "_chatgpt_models_loading", False))
+                self._dispatch_ui( lambda: setattr(self, "_chatgpt_models_loading", False))
         threading.Thread(target=work, daemon=True).start()
 
     def _switch_chatgpt_account(self, identity: str, dialog):
@@ -701,10 +765,10 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         def work():
             try:
                 confirmed = self.chatgpt.sign_out()
-                self.after(0, lambda: self._chatgpt_signed_out(confirmed))
+                self._dispatch_ui( lambda: self._chatgpt_signed_out(confirmed))
             except Exception as exc:
                 msg = str(exc)
-                self.after(0, lambda: self._chatgpt_connect_error(msg))
+                self._dispatch_ui( lambda: self._chatgpt_connect_error(msg))
         threading.Thread(target=work, daemon=True).start()
 
     def _chatgpt_signed_out(self, remote_confirmed: bool):
@@ -956,34 +1020,101 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         self.prompt.focus_set()
 
     def browse_files(self):
-        paths = filedialog.askopenfilenames(title="Select local PDFs", filetypes=[("PDF", "*.pdf")])
-        self.add_files(paths)
+        paths = filedialog.askopenfilenames(
+            title="Choose PDFs to import", filetypes=[("PDF documents", "*.pdf")],
+            parent=self)
+        if paths:
+            self.add_files(paths)
+
+    def _update_import_banner(self):
+        if not self.sources:
+            self.files_summary_var.set("No PDFs imported yet — use + Add PDFs.")
+            return
+        names = [f"{alias}: {path.name}" for alias, path in self.sources.items()]
+        summary = f"{len(names)} PDF{'s' if len(names) != 1 else ''} imported  |  "
+        summary += "  •  ".join(names[:4])
+        if len(names) > 4:
+            summary += f"  •  +{len(names)-4} more"
+        if (len(self.sources) > 1 and self.steps
+                and self.steps[0].get("op") == "load"
+                and all(step.get("op") != "insert_pdf" for step in self.steps)):
+            summary += "  |  Choose Merge PDFs or Insert PDF to include the others."
+        self.files_summary_var.set(summary)
 
     def add_files(self, paths):
         existing = {p.resolve() for p in self.sources.values()}
+        imported = []
+        skipped = []
         for raw in paths:
             path = Path(raw).expanduser().resolve()
-            if path.suffix.lower() == ".pdf" and path.is_file() and path not in existing:
-                alias = f"input{len(self.sources) + 1}"
-                self.sources[alias] = path
-                existing.add(path)
+            if path.suffix.lower() != ".pdf" or not path.is_file():
+                skipped.append(path.name)
+                continue
+            if path in existing:
+                skipped.append(path.name + " (already added)")
+                continue
+            # PDF validation also occurs during preview/compilation.
+            # Reject clearly invalid inputs immediately, so import is not
+            # mistaken for success when the file is unreadable.
+            try:
+                from .engine import _reader
+                _reader(path)
+            except (WorkflowError, OSError) as exc:
+                skipped.append(f"{path.name} (unreadable PDF)")
+                continue
+            alias = f"input{len(self.sources) + 1}"
+            self.sources[alias] = path
+            imported.append(f"{alias}: {path.name}")
+            existing.add(path)
         self._populate_sources()
         self._refresh_suggestions()
+        self._update_import_banner()
         self.preview()
+        if imported:
+            self.status_var.set(
+                f"Imported {len(imported)} PDF(s): " + ", ".join(imported[:2]) +
+                (f" (+{len(imported)-2} more)" if len(imported) > 2 else ""))
+        if skipped:
+            self.status_var.set(
+                f"Imported {len(imported)} PDF(s). Skipped {len(skipped)} file(s)."
+                if imported else "No new PDFs imported.")
+            messagebox.showwarning(
+                "PDF import",
+                "Some selections were not added:\n" + "\n".join(skipped[:8]) +
+                ("\n…" if len(skipped) > 8 else ""),
+                parent=self)
 
     def remove_file(self, alias):
         self.sources = {f"input{i}": path for i, path in enumerate(
             (p for k, p in self.sources.items() if k != alias), 1)}
+        if self.sources:
+            try:
+                compile_workflow(self.steps, self.sources)
+            except WorkflowError:
+                self.steps = [{"op": "load", "source": "input1"}]
+                self._populate_steps()
+        self.selected_page = None
         self._populate_sources()
         self._refresh_suggestions()
+        self._update_import_banner()
         self.preview()
+        self.status_var.set(f"Removed {alias} from the current workflow. Original PDFs were not changed.")
 
     def clear_files(self):
+        if not self.sources:
+            return
         self.sources.clear()
         self.compiled = None
+        self.steps = [{"op": "load", "source": "input1"}]
+        self.selected_page = None
+        self.active_document = 0
+        self.page_offset = 0
         self._populate_sources()
+        self._populate_steps()
         self._refresh_suggestions()
+        self._update_import_banner()
         self.preview()
+        self.status_var.set("Cleared imported PDFs. Files on disk are unchanged.")
 
     def set_steps(self, steps: list[dict]):
         try:
@@ -996,21 +1127,69 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         self.redo_stack.clear()
         self.steps = validated
         self._populate_steps()
+        self._update_import_banner()
         self.preview()
 
     def load_recipe(self, recipe):
         try:
             checked = validate_recipe(recipe)
+            if checked["name"] in ("PDF Merger", "Batch PDF Organizer") and len(self.sources) > 1:
+                checked["steps"][0]["sources"] = list(self.sources)
             self.workflow_name = checked["name"]
             self.status_var.set(f"Selected workflow: {self.workflow_name}")
             self.filename_pattern.set(checked["pattern"])
             self.set_steps(checked["steps"])
+            self._update_import_banner()
         except WorkflowError as exc:
             messagebox.showerror("Invalid recipe", str(exc), parent=self)
 
-    def add_step(self):
-        op = self.add_op.get()
+    def new_workflow(self):
+        """Start a fresh workflow instead of overwriting an existing recipe."""
+        if self.sources or self.selected_recipe_name or len(self.steps) > 1:
+            if not messagebox.askyesno(
+                "New workflow",
+                "Start a new workflow? This clears the current inputs and unsaved steps.\n"
+                "Saved workflows and your original PDF files stay unchanged.",
+                parent=self
+            ):
+                return
+        self.sources.clear()
+        self.steps = [{"op": "load", "source": "input1"}]
+        self.workflow_name = "Untitled workflow"
+        self.selected_recipe_name = None
+        self.filename_pattern.set("{source}_{index:02d}")
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+        self.compiled = None
+        self.selected_page = None
+        self.active_document = 0
+        self.page_offset = 0
+        self.zoom_scale = 1.0
+        self.zoom_var.set("100%")
+        self.prompt.delete("1.0", "end")
+        self._populate_sources()
+        self._populate_steps()
+        self._refresh_suggestions()
+        self._update_import_banner()
+        self.preview()
+        self.status_var.set("New workflow created. Add PDF files or choose a quick action.")
+
+    def add_step(self, operation: str | None = None):
+        op = operation or STEP_OPTIONS[self.add_op.get()]
+        if op in ("merge", "insert_pdf") and len(self.sources) < 2:
+            self._error("Import at least two PDFs before merging or inserting another PDF.")
+            return
         step = {"op": op, **deepcopy(OP_DEFAULTS[op])}
+        if op == "merge":
+            # Merging as a base operation; for later insertions use insert_pdf.
+            step["sources"] = list(self.sources)
+            self.set_steps([step] + self.steps[1:])
+            self.status_var.set("Merge PDFs: the source files are combined in import order.")
+            return
+        if op == "insert_pdf":
+            step["source"] = list(self.sources)[1]
+            step["position"] = 1
+            step["document"] = self.active_document
         if op == "reorder" and self.compiled and self.compiled.documents:
             step["order"] = list(range(1, len(self.compiled.documents[self.active_document].pages) + 1))
             step["document"] = self.active_document
@@ -1080,12 +1259,12 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
                     provider = {"Offline": "offline", "Ollama (local)": "ollama",
                                 "OpenAI API": "openai", "Claude API": "anthropic"}[mode]
                     steps = translate(prompt, aliases, provider, consent=consent)
-                self.after(0, lambda: self._interpreted(steps))
+                self._dispatch_ui( lambda: self._interpreted(steps))
             except Exception as exc:
                 message = str(exc)
-                self.after(0, lambda: self._error(message))
+                self._dispatch_ui( lambda: self._error(message))
             finally:
-                self.after(0, lambda: self._set_busy(False))
+                self._dispatch_ui( lambda: self._set_busy(False))
         threading.Thread(target=work, daemon=True).start()
 
     def _interpreted(self, steps):
@@ -1183,10 +1362,23 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         self._render_pages()
 
     def change_zoom(self, delta):
-        self.zoom_scale = max(0.6, min(1.8, round(self.zoom_scale + delta, 1)))
+        self.zoom_scale = max(0.6, min(2.6, round(self.zoom_scale + delta, 2)))
+        self.zoom_var.set(f"{round(self.zoom_scale * 100)}%")
         self._render_pages()
 
+    def _on_preview_resize(self, event):
+        if event.width < 200 or not self.compiled:
+            return
+        last = getattr(self, "_preview_render_width", 0)
+        if abs(event.width - last) < 20:
+            return
+        self._preview_render_width = event.width
+        if self._page_resize_job is not None:
+            self.after_cancel(self._page_resize_job)
+        self._page_resize_job = self.after(120, self._render_pages)
+
     def _render_pages(self):
+        self._page_resize_job = None
         self._clear_children(self.page_list)
         self.image_refs.clear()
         if not self.compiled:
@@ -1198,33 +1390,44 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         self.next_btn.configure(state="normal" if end < len(pages) else "disabled")
         if not pages:
             return
-        width = max(350, self.page_list.winfo_width() - 28)
-        cols = max(1, min(5, int(width / (220 * self.zoom_scale + 18))))
-        for i in range(cols):
-            self.page_list.grid_columnconfigure(i, weight=1)
+        usable = self.page_list.winfo_width()
+        if usable < 200:
+            usable = max(430, self.mainpane.winfo_width() - 82)
+        cols, thumb_w, thumb_h = thumbnail_layout(max(360, usable - 24), self.zoom_scale)
+        # Reset old layout columns when zooming in (six -> five -> four ...).
+        for col in range(9):
+            self.page_list.grid_columnconfigure(col, weight=1 if col < cols else 0, minsize=0)
         for i in range(self.page_offset, end):
             ref = pages[i]
-            card = ctk.CTkFrame(self.page_list, fg_color=SURFACE, corner_radius=9,
-                                border_width=2 if self.selected_page == i else 1,
-                                border_color=ACCENT if self.selected_page == i else BORDER)
-            card.grid(row=(i-self.page_offset)//cols, column=(i-self.page_offset)%cols,
-                      sticky="n", padx=11, pady=12)
+            card = ctk.CTkFrame(
+                self.page_list, fg_color=SURFACE, corner_radius=9,
+                border_width=2 if self.selected_page == i else 1,
+                border_color=ACCENT if self.selected_page == i else BORDER)
+            card.grid(row=(i - self.page_offset) // cols,
+                      column=(i - self.page_offset) % cols, sticky="n",
+                      padx=4, pady=8)
             card.page_index = i
             try:
-                img = image_for(ref, self.compiled.sources, int(190 * self.zoom_scale))
-                # Keep actual ratio; scale image and card with the selected zoom.
-                ratio = min(1.0, (245 * self.zoom_scale)/max(1, img.height))
-                size = (max(1,int(img.width*ratio)), max(1,int(img.height*ratio)))
+                img = image_for(ref, self.compiled.sources, max(thumb_w, 72))
+                ratio = min(thumb_w / max(1, img.width),
+                            thumb_h / max(1, img.height))
+                size = (max(1, int(img.width * ratio)),
+                        max(1, int(img.height * ratio)))
                 visual = ctk.CTkImage(light_image=img, dark_image=img, size=size)
                 self.image_refs.append(visual)
-                thumb = ctk.CTkLabel(card, text="", image=visual, height=int(255*self.zoom_scale), width=int(196*self.zoom_scale))
+                thumb = ctk.CTkLabel(card, text="", image=visual,
+                                     height=thumb_h, width=thumb_w)
             except Exception:
-                thumb = ctk.CTkLabel(card, text="Preview unavailable", height=int(250*self.zoom_scale), width=int(190*self.zoom_scale), text_color=MUTED, font=F(12))
-            thumb.pack(padx=12, pady=(13, 5))
+                thumb = ctk.CTkLabel(card, text="Preview unavailable",
+                                     height=thumb_h, width=thumb_w,
+                                     text_color=MUTED, font=F(10))
+            thumb.pack(padx=5, pady=(7, 2))
             thumb.page_index = i
-            label = ctk.CTkLabel(card, text=f"Page {i + 1}  ·  {ref.source} #{ref.index + 1}",
-                                 text_color=MUTED, font=F(11))
-            label.pack(pady=(0, 11))
+            label = ctk.CTkLabel(
+                card, text=f"Page {i+1}  ·  {ref.source} #{ref.index+1}",
+                text_color=MUTED, font=F(10), width=thumb_w,
+                wraplength=thumb_w, height=25)
+            label.pack(padx=3, pady=(0, 6))
             label.page_index = i
             for widget in (card, thumb, label):
                 widget.bind("<ButtonPress-1>", lambda _event, p=i: self._start_drag(p))
@@ -1251,6 +1454,9 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
             order.insert(dest, moving)
             self.set_steps(self.steps + [{"op": "reorder", "order": order, "document": self.active_document}])
         else:
+            self.status_var.set(
+                f"Selected output page {origin + 1}. Use Delete page or Rotate, "
+                "or drag onto another page to reorder.")
             self._render_pages()
 
     def change_page_offset(self, count):
@@ -1267,12 +1473,21 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
             self.status_var.set("Select a page thumbnail first.")
 
     def delete_selected_page(self):
-        if self.selected_page is not None and self.compiled:
-            self.set_steps(self.steps + [{"op": "delete", "pages": str(self.selected_page+1),
-                                           "document": self.active_document}])
-            self.selected_page = None
-        else:
-            self.status_var.set("Select a page thumbnail first.")
+        if self.selected_page is None or not self.compiled:
+            self.status_var.set("Click a page thumbnail to select it, then choose Delete page.")
+            return
+        pages = self.compiled.documents[self.active_document].pages
+        if len(pages) <= 1:
+            self._error("Cannot delete the last page of a PDF. A saved output cannot be empty.")
+            return
+        number = self.selected_page + 1
+        self.selected_page = None
+        self.set_steps(self.steps + [{"op": "delete", "pages": str(number),
+                                     "document": self.active_document}])
+        if self.compiled:
+            self.page_offset = max(0, min(self.page_offset, len(pages) - 2))
+            self.status_var.set(f"Deleted output page {number} in the preview. "
+                                "Click Save as PDF to create the edited file.")
 
     def save_recipe(self):
         name = ctk.CTkInputDialog(title="Save reusable workflow", text="Workflow name:").get_input()
@@ -1309,38 +1524,92 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         self.stop_button.configure(state="normal" if value else "disabled")
 
     def run(self):
+        """Save As for one output, or choose a folder for multiple outputs."""
         if self.busy:
             return
         self.preview()
         if not self.compiled:
-            self._error("Fix the preview errors before saving.")
-            return
-        folder = filedialog.askdirectory(title="Choose a destination folder for new PDFs")
-        if not folder:
+            self._error("The output preview is not valid. Fix its error before saving.")
             return
         compilation = self.compiled
-        pattern = self.filename_pattern.get()
-        names = output_names(compilation, pattern)
-        if not messagebox.askokcancel("Confirm PDF output",
-            f"Create {len(names)} new PDF(s) in:\n{folder}\n\n" +
-            "\n".join(names[:8]) + ("\n…" if len(names)>8 else "") +
-            "\n\nExisting files will NOT be overwritten.", parent=self):
+        try:
+            initial_names = output_names(compilation, self.filename_pattern.get())
+            if len(compilation.documents) == 1:
+                # An actual filename picker is essential for single-PDF workflows.
+                # Never overwrite an existing file or an imported source.
+                while True:
+                    selected = filedialog.asksaveasfilename(
+                        title="Save edited PDF as",
+                        defaultextension=".pdf", initialfile=initial_names[0],
+                        filetypes=[("PDF document", "*.pdf")],
+                        parent=self)
+                    if not selected:
+                        self.status_var.set("Save canceled. No PDF was changed.")
+                        return
+                    target = Path(selected).expanduser().resolve()
+                    if target.suffix.lower() != ".pdf":
+                        messagebox.showwarning(
+                            "PDF filename", "Save the output using a .pdf filename.",
+                            parent=self)
+                        continue
+                    if target.exists() or target in compilation.sources.values():
+                        messagebox.showwarning(
+                            "Choose another filename",
+                            "This filename already exists or is one of your original PDFs.\n"
+                            "Choose a new filename; PDFManipulator never overwrites files.",
+                            parent=self)
+                        continue
+                    pattern = target.stem.replace("{", "{{").replace("}", "}}")
+                    names = output_names(compilation, pattern)
+                    if names != [target.name]:
+                        messagebox.showwarning(
+                            "Invalid filename",
+                            "Choose a different PDF filename. This name cannot be used safely.",
+                            parent=self)
+                        continue
+                    folder = target.parent
+                    break
+            else:
+                selected = filedialog.askdirectory(
+                    title="Choose where to save the output PDFs", parent=self)
+                if not selected:
+                    self.status_var.set("Save canceled. No PDF was changed.")
+                    return
+                folder = Path(selected).expanduser().resolve()
+                pattern, names = next_available_pattern(
+                    compilation, folder, self.filename_pattern.get())
+            if not messagebox.askokcancel(
+                "Confirm Save As",
+                f"Save {len(names)} PDF file(s) in:\n{folder}\n\n" +
+                "\n".join(names[:8]) + ("\n…" if len(names) > 8 else "") +
+                "\n\nOriginal PDFs will not be changed or overwritten.",
+                parent=self):
+                self.status_var.set("Save canceled. No PDF was changed.")
+                return
+        except (WorkflowError, OSError, ValueError) as exc:
+            self._error(str(exc))
             return
+
         self.cancel.clear()
         self._set_busy(True)
         self.progress.set(0)
+        self.status_var.set(f"Saving {len(names)} PDF file(s)…")
+
         def update(n, total):
-            self.after(0, lambda: self.progress.set(n/total))
+            self._dispatch_ui( lambda done=n, count=total:
+                       self.progress.set(done / max(1, count)))
+
         def task():
             try:
-                created = execute_workflow(compilation, folder, pattern=pattern,
-                                           progress=update, cancel=self.cancel)
-                self.after(0, lambda: self._done(created))
+                created = execute_workflow(
+                    compilation, folder, pattern=pattern,
+                    progress=update, cancel=self.cancel)
+                self._dispatch_ui( lambda: self._done(created))
             except Exception as exc:
                 msg = str(exc)
-                self.after(0, lambda: self._error(msg))
+                self._dispatch_ui( lambda: self._error(msg))
             finally:
-                self.after(0, lambda: self._set_busy(False))
+                self._dispatch_ui( lambda: self._set_busy(False))
         threading.Thread(target=task, daemon=True).start()
 
     def _done(self, paths):

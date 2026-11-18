@@ -11,10 +11,10 @@ A **Windows desktop app** for merging, splitting, rotating, rearranging, and org
 1. Click **Code → Download ZIP** above, then extract the ZIP to a folder.
 2. Install **Python 3.11 or later** from [python.org](https://www.python.org/downloads/windows/) if you do not already have it. Enable the Windows Python launcher during installation.
 3. Double-click **`Start PDFManipulator.bat`** inside the extracted folder. On the first launch, it installs the required Python packages; internet access is needed for this first-time setup.
-4. Once the app opens, click **+ Add PDFs** (or drag PDF files into the window).
+4. Once the app opens, click **+ Add PDFs** (or drag PDF files into the window). The import bar confirms each filename and its input order.
 5. Choose a **Quick action** on the left, or type an instruction and click **Build workflow**.
-6. Check **Document preview**. Click **Edit workflow** to change individual steps.
-7. Click **Export PDF**, choose where to save, and confirm. Your original files are not overwritten.
+6. Check **Document preview**. Click a thumbnail and choose **Delete page** or **Rotate**, or click **Edit workflow** to add steps such as **Insert / append PDF**. The zoom buttons resize pages and adjust the number of columns (six across at 100%).
+7. Click **Save as PDF**. For one output, choose its filename; for multiple outputs, choose a folder. Your original files are never overwritten.
 
 **Already have `PDFManipulator.exe`?** Double-click it instead. The standalone Windows EXE includes Python and does not require installation. The source repository does **not** include the compiled EXE. You can build one using the instructions below; check [GitHub Releases](https://github.com/PraagneySharma/PDFManipulator/releases) for an official download if one is published.
 
@@ -26,9 +26,13 @@ A **Windows desktop app** for merging, splitting, rotating, rearranging, and org
 | Fix two one-sided scans | Add fronts and backs → **Duplex Scan Merger** |
 | Split a PDF into smaller files | **Split Every N Pages** |
 | Rotate upside-down pages | **Rotate Scanned Pages** |
-| Extract or remove selected pages | **Extract Selected Pages** or **Edit workflow** |
+| Extract or remove selected pages | Select a page → **Delete page**, or **Edit workflow** to add a Delete step |
+| Insert another PDF at the beginning or middle | **Edit workflow** → **+ Insert PDF at position 1**; set position to a page number or `end` |
+| Start over without losing saved workflows | **+ New workflow** in the top bar |
 | Remove blank scans | **Remove Blank Pages** (always review the preview) |
 | Process each PDF separately | **Batch PDF Organizer** |
+
+**Example:** Import two PDFs, then enter: “Delete the first page of the first PDF. Add the second PDF to the first PDF and make sure the second PDF is page 1.” The app deletes page 1 from the first document, then inserts every page from the second document at the beginning. Review the result and save it with **Save as PDF**.
 
 For more examples, see the [step-by-step user guide](docs/USER_GUIDE.md).
 

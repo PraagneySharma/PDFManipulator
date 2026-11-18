@@ -24,7 +24,7 @@ Or double-click `Start PDFManipulator.bat` to automate the first two commands. T
 .\.venv\Scripts\python.exe -m tests.smoke_ui
 ~~~
 
-The last test needs a graphical Windows desktop. PDF test documents are generated during tests and never committed. The ChatGPT auth and inference tests simulate authorization; live account sign-in requires a human to approve the browser flow.
+The GUI smoke test exercises file-import feedback, single-page deletion, responsive zoom, the New workflow button, two-PDF insertion, and Save As. The last test needs a graphical Windows desktop. PDF test documents are generated during tests and never committed. The ChatGPT auth and inference tests simulate authorization; live account sign-in requires a human to approve the browser flow.
 
 ## Build a portable Windows EXE
 
@@ -54,6 +54,8 @@ This should launch, load synthetic PDFs, render thumbnails, export a verified PD
 | `pdfmanipulator/ai.py` | Optional Ollama and separately billed API providers |
 | `pdfmanipulator/chatgpt.py` | ChatGPT-plan OAuth connection, protected local sessions, model discovery and AI inference |
 | `pdfmanipulator/recipes.py` | Presets and saved workflow JSON |
+| `pdfmanipulator/layout.py` | Responsive thumbnail layout: six columns at 100%, fewer when zooming in |
+| `pdfmanipulator/exports.py` | Safe, collision-free batch export naming |
 | `pdfmanipulator/previews.py` | Local thumbnail generation |
 | `pdfmanipulator/cli.py` | Command-line workflows |
 | `pdfmanipulator/mcp_server.py` | Optional, folder-restricted stdio MCP integration |
@@ -77,7 +79,17 @@ A recipe is validated JSON with `name`, `pattern`, and `steps`. The first step m
 }
 ~~~
 
-Other supported operations include `load`, `load_each`, `duplex`, `interleave`, `split_ranges`, `extract`, `delete`, `reorder`, `reverse`, `rotate`, `duplicate` and `remove_blanks`. See `pdfmanipulator/engine.py` for exact validation rules.
+Other supported operations include `load`, `load_each`, `duplex`, `interleave`, `insert_pdf`, `split_ranges`, `extract`, `delete`, `reorder`, `reverse`, `rotate`, `duplicate` and `remove_blanks`. `insert_pdf` is a post-load operation with `source`, `position` (1-based integer or `end`), and optional `document` index. For example:
+
+~~~json
+[
+  {"op": "load", "source": "input1"},
+  {"op": "delete", "pages": "1"},
+  {"op": "insert_pdf", "source": "input2", "position": 1}
+]
+~~~
+
+See `pdfmanipulator/engine.py` for exact validation rules.
 
 ## CLI
 

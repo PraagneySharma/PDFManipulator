@@ -51,6 +51,7 @@ _ALLOWED: dict[str, set[str]] = {
     "load": {"source"},
     "load_each": {"sources"},
     "merge": {"sources"},
+    "insert_pdf": {"source", "position", "document"},
     "duplex": {"fronts", "backs", "reverse_backs", "rotate_backs", "skip_first_back"},
     "interleave": {"sources", "reverse_second"},
     "split_every": {"n"},
@@ -136,8 +137,12 @@ def validate_steps(steps: Any) -> list[dict[str, Any]]:
         extra = set(step) - {"op"} - _ALLOWED[op]
         if extra:
             raise WorkflowError(f"Step {i}: unexpected parameters {', '.join(sorted(extra))}.")
-        if op in ("load", "duplex") and not isinstance(step.get("source", step.get("fronts")), str):
+        if op in ("load", "duplex", "insert_pdf") and not isinstance(step.get("source", step.get("fronts")), str):
             raise WorkflowError(f"Step {i} needs a source alias.")
+        if op == "insert_pdf":
+            position = step.get("position")
+            if position != "end" and (type(position) is not int or position < 1):
+                raise WorkflowError("Insert PDF position must be a page number starting at 1 or 'end'.")
         if op in ("load_each", "merge", "interleave"):
             names = step.get("sources")
             if not isinstance(names, list) or not names or not all(isinstance(n, str) and n for n in names):
@@ -315,7 +320,13 @@ def compile_workflow(
                     next_documents.append(doc)
                     continue
                 pages = list(doc.pages)
-                if op == "split_every":
+                if op == "insert_pdf":
+                    inserted = get_pages(step["source"])
+                    position = len(pages) if step["position"] == "end" else step["position"] - 1
+                    if position > len(pages):
+                        raise WorkflowError(f"Insert PDF position must be between 1 and {len(pages)+1}, or end.")
+                    next_documents.append(Document(pages[:position] + inserted + pages[position:], doc.source_name))
+                elif op == "split_every":
                     n = step["n"]
                     for offset in range(0, len(pages), n):
                         next_documents.append(Document(pages[offset:offset + n], doc.source_name))

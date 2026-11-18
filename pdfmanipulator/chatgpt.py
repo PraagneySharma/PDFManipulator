@@ -541,6 +541,10 @@ class ChatGPTConnection:
 
     def interpret(self, prompt: str, aliases: list[str], *, consent: bool) -> list[dict]:
         from .ai import SYSTEM_PROMPT, parse_model_steps
+        from .parser import two_pdf_request
+        deterministic = two_pdf_request(prompt, aliases)
+        if deterministic is not None:
+            return deterministic
         if not consent:
             raise ChatGPTError("Allow sending the instruction to ChatGPT first.")
         if not prompt.strip() or len(prompt) > 2000:

@@ -42,7 +42,7 @@ class RepositoryLayoutTests(unittest.TestCase):
             "Code", "Download ZIP",
             "Python 3.11", "Start PDFManipulator.bat",
             "+ Add PDFs", "Build workflow", "Document preview",
-            "Export PDF", "## Build your own Windows EXE",
+            "Save as PDF", "## Build your own Windows EXE",
             "No.", "docs/USER_GUIDE.md",
         ):
             with self.subTest(section=essential):

@@ -12,7 +12,7 @@ The batch launcher automatically opens `dist\PDFManipulator.exe` when that file 
 
 ## 2. Add your PDFs
 
-Select **+ Add PDFs** or drag PDF files into the app. You can add multiple documents. The source PDFs are left unchanged.
+Select **+ Add PDFs** or drag PDF files into the app. A visible import bar lists the number of PDFs and each input alias (`input1`, `input2`, etc.), so you can confirm both files are present and in the intended order. Use **Clear inputs** to remove them from the current workflow without deleting the files from your computer.
 
 Choose a preset under **Quick actions**, or type a request in **Describe your changes** and select **Build workflow**.
 
@@ -28,12 +28,13 @@ The offline parser understands a constrained set of instructions. If it cannot i
 
 ## 3. Preview and edit
 
-The **Document preview** displays thumbnails of the proposed output. Your requested changes are a *preview* until you export.
+The **Document preview** displays thumbnails of the proposed output. Your requested changes are a *preview* until you save. At 100% zoom, six pages fit in a row. Zooming in increases each page's width and height, so fewer pages fit per row.
 
 - **Edit workflow** opens the side panel to review and modify steps, input files, output names, and undo/redo.
 - **Compare originals** shows the input preview.
 - Use **+ / −** zoom to inspect pages.
-- Select a page to rotate/delete; drag pages to reorder where supported.
+- Click a page thumbnail to select it, then choose **Delete page** or **Rotate** above the preview. Drag thumbnails to reorder.
+- Click **+ New workflow** in the top bar to start from a blank workspace without deleting saved workflows.
 - You can save reusable workflows and import/export their recipe JSON.
 
 **Do not export until the displayed page order is correct.** The blank-page detector is conservative and can misclassify faint markings.
@@ -42,7 +43,7 @@ The **Document preview** displays thumbnails of the proposed output. Your reques
 
 ### Merge several PDFs
 
-Add the files in the intended order → choose **PDF Merger** → inspect the preview → **Export PDF**.
+Add the files in the intended order → choose **Merge PDFs** from Quick actions → inspect the preview → **Save as PDF**. This merges all currently imported PDFs in their import order.
 
 ### Combine front and back scans (duplex)
 
@@ -53,21 +54,27 @@ Add the files in the intended order → choose **PDF Merger** → inspect the pr
 5. If back pages are upside-down or in ascending order, choose **Edit workflow** to change the reverse/rotation settings.
 6. Export the result.
 
+### Insert a PDF after other edits
+
+Add both PDFs, then choose **Edit workflow** → **+ Insert PDF at position 1**. The resulting **Insert PDF** step places every page of `input2` at the beginning of the current output. Edit that step's **position** to a different 1-based page number, or type `end` to append the PDF.
+
+For the request *“Delete the first Page of the first PDF. Add the second PDF to the first PDF and make sure the second PDF is page 1”*, enter the instruction and select **Build workflow**. The resulting steps are **Load first PDF → Delete page 1 → Insert second PDF at position 1**. Review all pages before saving.
+
 ### Split a document
 
 Add a PDF → choose **Split Every N Pages** → adjust the number under **Edit workflow** → inspect each output → export.
 
 ### Extract or delete pages
 
-Use **Extract Selected Pages** or add a **Delete** step. Page selectors are **1-based**, using forms such as `1,3,5-8`, `even`, `odd`, and `all`.
+Click a page thumbnail, then choose **Delete page** in the preview toolbar, or add a **Delete** step through **Edit workflow**. Page selectors are **1-based**, using forms such as `1,3,5-8`, `even`, `odd`, and `all`.
 
 ### Remove blank pages
 
 Choose **Remove Blank Pages**, inspect the output, and restore any pages that were incorrectly classified before exporting.
 
-## 5. Export the result
+## 5. Save the result
 
-Click **Export PDF** in the top-right, select an output folder, and confirm. Existing output filenames are not silently overwritten. If a name already exists, change the filename pattern or destination.
+Click **Save as PDF** in the top-right. For a single output, a **Save As** dialog lets you choose both the folder and filename. For multiple outputs, choose the destination folder and review the generated filenames. If batch filenames already exist, the app proposes unused versioned filenames. The app never overwrites existing PDFs.
 
 Source PDF documents are never modified.
 
@@ -89,7 +96,7 @@ To connect ChatGPT:
 2. Complete the sign-in and permission request in your system browser.
 3. Return to PDFManipulator. If your account permits plan usage, open **AI settings** to select an offered model.
 4. Add PDFs and type a request. Check **Send instruction text to selected AI** before building the workflow.
-5. Review the generated workflow and page preview. Export locally.
+5. Review the generated workflow and page preview. Use **Save as PDF** to export locally.
 
 **Privacy:** The AI interpreter sends the instruction and generic input labels such as `input1`, not your PDF bytes or actual PDF filenames. Avoid writing confidential information *in the instruction itself*, since that text is sent when you consent. ChatGPT plan usage is subject to eligibility and usage limits. The browser sign-in flow requires live user approval; automated tests use simulated responses rather than real accounts.
 
