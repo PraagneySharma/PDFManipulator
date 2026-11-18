@@ -12,8 +12,8 @@ A **Windows desktop app** for merging, splitting, rotating, rearranging, and org
 2. Install **Python 3.11 or later** from [python.org](https://www.python.org/downloads/windows/) if you do not already have it. Enable the Windows Python launcher during installation.
 3. Double-click **`Start PDFManipulator.bat`** inside the extracted folder. On the first launch, it installs the required Python packages; internet access is needed for this first-time setup.
 4. Once the app opens, click **+ Add PDFs** (or drag PDF files into the window). The import bar confirms each filename and its input order.
-5. Choose a **Quick action** on the left, or type an instruction and click **Build workflow**.
-6. Check **Document preview**. Click a thumbnail and choose **Delete page** or **Rotate**, or click **Edit workflow** to add steps such as **Insert / append PDF**. The zoom buttons resize pages and adjust the number of columns (six across at 100%).
+5. The **Build your workflow** panel is already open. Under **Start with**, select **Edit PDFs separately** when you need to change PDF 1 or PDF 2 before combining them.
+6. Under **Workflow steps**, select an operation such as **Delete pages**, click **+ Step**, and choose which PDF to edit. After applying the edits, click **+ Merge edited PDFs**. Review the page order in the preview to the right.
 7. Click **Save as PDF**. For one output, choose its filename; for multiple outputs, choose a folder. Your original files are never overwritten.
 
 **Already have `PDFManipulator.exe`?** Double-click it instead. The standalone Windows EXE includes Python and does not require installation. The source repository does **not** include the compiled EXE. You can build one using the instructions below; check [GitHub Releases](https://github.com/PraagneySharma/PDFManipulator/releases) for an official download if one is published.
@@ -22,17 +22,18 @@ A **Windows desktop app** for merging, splitting, rotating, rearranging, and org
 
 | Goal | Where to start |
 | --- | --- |
-| Combine several PDFs | Add the files → **PDF Merger** |
+| Merge original PDFs immediately | **Start with → Merge original PDFs now** |
+| Edit separate PDFs, then combine | **Edit PDFs separately → Add page edits → + Merge edited PDFs** |
 | Fix two one-sided scans | Add fronts and backs → **Duplex Scan Merger** |
 | Split a PDF into smaller files | **Split Every N Pages** |
 | Rotate upside-down pages | **Rotate Scanned Pages** |
-| Extract or remove selected pages | Select a page → **Delete page**, or **Edit workflow** to add a Delete step |
-| Insert another PDF at the beginning or middle | **Edit workflow** → **+ Insert PDF at position 1**; set position to a page number or `end` |
+| Extract or remove selected pages | Choose **Delete pages** or **Extract pages**, then select the target PDF |
+| Insert another PDF at the beginning or middle | Choose **+ Insert PDF at position 1** in the builder; adjust the position or type `end` |
 | Start over without losing saved workflows | **+ New workflow** in the top bar |
 | Remove blank scans | **Remove Blank Pages** (always review the preview) |
 | Process each PDF separately | **Batch PDF Organizer** |
 
-**Example:** Import two PDFs, then enter: “Delete the first page of the first PDF. Add the second PDF to the first PDF and make sure the second PDF is page 1.” The app deletes page 1 from the first document, then inserts every page from the second document at the beginning. Review the result and save it with **Save as PDF**.
+**Example — delete the first page of PDF 2, then merge:** Import PDF 1 and PDF 2. Choose **Edit PDFs separately**. Add **Delete pages** and select **PDF 2** with page **1** in the step editor. Next click **+ Merge edited PDFs**. The result contains all of PDF 1, followed by PDF 2 without its first page. Use **Save as PDF** when the preview is correct.
 
 For more examples, see the [step-by-step user guide](docs/USER_GUIDE.md).
 
@@ -40,7 +41,7 @@ For more examples, see the [step-by-step user guide](docs/USER_GUIDE.md).
 
 **No.** The built-in PDF tools and basic English instruction parser work offline.
 
-For more flexible instructions, click **Continue with ChatGPT**, approve the browser authorization, and select an available model. Eligible accounts can use authorized ChatGPT-plan usage without providing an OpenAI API key. **Limits apply; this is not unlimited API access.** The real-account sign-in flow requires your approval and has not been validated against every ChatGPT account.
+For optional instruction-based help, click **AI helper (optional)** in the top bar, then **Continue with ChatGPT**, approve the browser authorization, and select an available model. Eligible accounts can use authorized ChatGPT-plan usage without providing an OpenAI API key. **Limits apply; this is not unlimited API access.** The real-account sign-in flow requires your approval and has not been validated against every ChatGPT account.
 
 Only your **instruction text and generic input labels** are sent to the selected AI; PDF bytes and filenames are **not** sent through the instruction interpreter. You always review the proposed changes before exporting.
 

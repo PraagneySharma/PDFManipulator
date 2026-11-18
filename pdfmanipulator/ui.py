@@ -47,8 +47,9 @@ CANVAS_BG = ("#f4f6fa", "#111723")
 
 OP_DEFAULTS = {
     "merge": {"sources": ["input1", "input2"]},
+    "merge_documents": {},
     "split_every": {"n": 3},
-    "split_ranges": {"ranges": ["1-5"], "include_remaining": True},
+    "split_ranges": {"ranges": ["1"], "include_remaining": True},
     "extract": {"pages": "1"},
     "delete": {"pages": "1"},
     "insert_pdf": {"source": "input2", "position": 1},
@@ -58,8 +59,20 @@ OP_DEFAULTS = {
     "remove_blanks": {"threshold": 0.003},
     "reorder": {"order": []},
 }
+START_MODES = {
+    "Edit PDFs separately": "load_each",
+    "PDF 1 only": "load",
+    "Merge original PDFs now": "merge",
+    "Duplex scan pair": "duplex",
+}
+
+DOCUMENT_ACTIONS = {
+    "insert_pdf", "split_every", "split_ranges", "extract", "delete",
+    "reorder", "reverse", "rotate", "duplicate", "remove_blanks",
+}
+
 STEP_OPTIONS = {
-    "Merge PDFs (all inputs)": "merge",
+    "Merge edited PDFs": "merge_documents",
     "Insert / append PDF": "insert_pdf",
     "Split every N pages": "split_every",
     "Split into ranges": "split_ranges",
@@ -77,9 +90,11 @@ def describe(step: dict) -> str:
     op = step["op"]
     descriptions = {
         "load": f"Open {step.get('source')}",
-        "merge": "Join " + ", ".join(step.get("sources", [])),
+        "merge": "Join source PDFs now: " + ", ".join(step.get("sources", [])),
+        "merge_documents": "Combine the edited PDF outputs, preserving their current order" +
+                           (f" ({step['order']})" if "order" in step else ""),
         "insert_pdf": f"Insert all pages from {step.get('source')} at position {step.get('position')}",
-        "load_each": "Batch each input file independently",
+        "load_each": "Open imported PDFs separately (edit each before merging)",
         "duplex": f"Interleave {step.get('fronts')} + {step.get('backs')}" +
                   ("  ·  reverse backs" if step.get("reverse_backs", True) else "") +
                   ("  ·  rotate backs" if step.get("rotate_backs") else ""),
@@ -98,79 +113,165 @@ def describe(step: dict) -> str:
     return descriptions.get(op, op.replace("_", " ").title())
 
 class StepDialog(ctk.CTkToplevel):
-    """Friendly parameter editor with a validated JSON/list escape hatch."""
+    """Edit one manual step using PDF names and human page numbers."""
+
     def __init__(self, parent: "StudioApp", number: int):
         super().__init__(parent)
         self.parent = parent
         self.number = number
         self.step = deepcopy(parent.steps[number])
-        self.title("Edit workflow step")
-        self.geometry("470x505")
-        self.minsize(440, 340)
+        self.title("Configure workflow step")
+        self.geometry("520x550")
+        self.minsize(470, 380)
         self.transient(parent)
         self.grab_set()
         self.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(self, text=describe(self.step), font=F(19, "bold"),
-                     wraplength=420, justify="left").grid(row=0, column=0, padx=20, pady=(22, 10), sticky="w")
-        self.entries: dict[str, ctk.CTkEntry] = {}
-        container = ctk.CTkScrollableFrame(self, fg_color="transparent")
-        container.grid(row=1, column=0, padx=16, sticky="nsew")
         self.grid_rowconfigure(1, weight=1)
+
+        label = self.step["op"].replace("_", " ").title()
+        ctk.CTkLabel(self, text=f"Step {number + 1} — {label}",
+                     font=F(19, "bold"), text_color=TEXT, anchor="w").grid(
+            row=0, column=0, sticky="ew", padx=20, pady=(20, 10))
+
+        self.entries: dict[str, ctk.CTkEntry] = {}
+        self.source_choices: dict[str, str] = {}
+        self.target_choices: dict[str, int | None] = {}
+        self.source_var: tk.StringVar | None = None
+        self.target_var: tk.StringVar | None = None
+
+        container = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        container.grid(row=1, column=0, padx=18, sticky="nsew")
+
+        if self.step["op"] in DOCUMENT_ACTIONS and number > 0:
+            try:
+                previous = compile_workflow(parent.steps[:number], parent.sources)
+                documents = previous.documents
+            except WorkflowError:
+                documents = []
+            if documents:
+                self.target_choices = {"All current PDFs": None}
+                for index, document in enumerate(documents):
+                    name = document.source_name[:34]
+                    self.target_choices[f"PDF {index + 1} — {name}"] = index
+                ctk.CTkLabel(container, text="Apply changes to", text_color=TEXT,
+                             font=F(13, "bold")).pack(anchor="w", pady=(5, 5))
+                current_target = self.step.get("document")
+                current_label = next((
+                    name for name, value in self.target_choices.items()
+                    if value == current_target), "All current PDFs")
+                self.target_var = tk.StringVar(value=current_label)
+                ctk.CTkOptionMenu(
+                    container, values=list(self.target_choices),
+                    variable=self.target_var, fg_color=BTN, button_color=BORDER,
+                    text_color=TEXT, font=F(12), height=37
+                ).pack(fill="x", pady=(0, 9))
+                ctk.CTkLabel(
+                    container,
+                    text="Choose PDF 2 to delete pages from the second file "
+                         "before merging. Page numbers are relative to the chosen PDF.",
+                    text_color=MUTED, font=F(11), wraplength=420,
+                    justify="left").pack(anchor="w", pady=(0, 10))
+
         if self.step["op"] in ("insert_pdf", "merge"):
-            sources = ", ".join(f"{key} = {value.name}" for key, value in parent.sources.items())
-            ctk.CTkLabel(container, text="Available PDFs: " + (sources or "Add PDFs first"),
-                         text_color=MUTED, font=F(11), wraplength=390,
-                         justify="left").pack(anchor="w", pady=(4, 8))
+            sources = ", ".join(
+                f"PDF {i + 1}: {path.name}" for i, path in enumerate(parent.sources.values()))
+            ctk.CTkLabel(
+                container, text="Imported: " + (sources or "Add PDF files first."),
+                text_color=MUTED, font=F(11), wraplength=420,
+                justify="left").pack(anchor="w", pady=(4, 9))
+
         for key, value in self.step.items():
-            if key == "op":
+            if key in ("op", "document"):
                 continue
-            ctk.CTkLabel(container, text=key.replace("_", " ").capitalize(), anchor="w",
-                         text_color=MUTED, font=F(12)).pack(fill="x", pady=(8, 4))
+            heading = {
+                "source": "Which PDF to insert?",
+                "pages": "Page numbers (1,3,5-7, even, odd, all)",
+                "position": "Insert before output page (1 = beginning; end = append)",
+                "order": "Merge order (1 = PDF 1, 2 = PDF 2)",
+                "degrees": "Rotation (90, 180, 270)",
+                "n": "Pages per output PDF",
+                "ranges": "Page ranges (JSON list)",
+                "threshold": "Blank-page detection sensitivity",
+            }.get(key, key.replace("_", " ").capitalize())
+            ctk.CTkLabel(container, text=heading, anchor="w",
+                         text_color=TEXT, font=F(12)).pack(
+                fill="x", pady=(9, 5))
+            if key == "source" and self.step["op"] == "insert_pdf" and parent.sources:
+                self.source_choices = {
+                    f"PDF {i + 1} — {path.name[:32]}": alias
+                    for i, (alias, path) in enumerate(parent.sources.items())}
+                selected = next(
+                    (name for name, alias in self.source_choices.items() if alias == value),
+                    next(iter(self.source_choices)))
+                self.source_var = tk.StringVar(value=selected)
+                ctk.CTkOptionMenu(
+                    container, values=list(self.source_choices),
+                    variable=self.source_var, fg_color=BTN, button_color=BORDER,
+                    text_color=TEXT, font=F(12), height=37
+                ).pack(fill="x")
+                continue
             hint = json.dumps(value) if isinstance(value, (list, bool, float, int)) else str(value)
             entry = ctk.CTkEntry(container, fg_color=SURFACE, text_color=TEXT,
                                  font=F(13), border_color=BORDER, height=38)
             entry.insert(0, hint)
             entry.pack(fill="x")
             self.entries[key] = entry
-        ctk.CTkLabel(self, text="Pages: 1,3,5-7 / even / odd / all. Insert position: 1 or end. Lists: JSON.",
-                     text_color=MUTED, font=F(11)).grid(row=2, column=0, pady=8)
-        ctk.CTkButton(self, text="Apply changes", command=self.commit,
-                      font=F(13, "bold"), fg_color=ACCENT, height=40).grid(
-            row=3, column=0, padx=20, pady=(2, 20), sticky="ew")
+
+        ctk.CTkLabel(
+            self, text="Changes update the preview, not the original PDFs.",
+            text_color=MUTED, font=F(11)).grid(row=2, column=0, pady=(12, 6))
+        ctk.CTkButton(
+            self, text="Apply step", command=self.commit,
+            font=F(13, "bold"), fg_color=ACCENT, height=41
+        ).grid(row=3, column=0, padx=20, pady=(0, 17), sticky="ew")
 
     def commit(self):
         candidate = dict(self.step)
         try:
             for key, entry in self.entries.items():
-                text = entry.get().strip()
+                value_text = entry.get().strip()
                 old = self.step[key]
-                if isinstance(old, bool):
-                    if text.lower() not in ("true", "false"):
+                if key == "position":
+                    value = "end" if value_text.lower() == "end" else int(value_text)
+                elif isinstance(old, bool):
+                    if value_text.lower() not in ("true", "false"):
                         raise WorkflowError(f"{key} must be true or false.")
-                    value = text.lower() == "true"
+                    value = value_text.lower() == "true"
                 elif isinstance(old, int):
-                    value = "end" if key == "position" and text.lower() == "end" else int(text)
+                    value = int(value_text)
                 elif isinstance(old, float):
-                    value = float(text)
+                    value = float(value_text)
                 elif isinstance(old, list):
-                    value = json.loads(text)
+                    value = json.loads(value_text)
                 else:
-                    value = text
+                    value = value_text
                 candidate[key] = value
+            if self.source_var is not None:
+                candidate["source"] = self.source_choices[self.source_var.get()]
+            if self.target_var is not None:
+                selected_target = self.target_choices[self.target_var.get()]
+                if selected_target is None:
+                    candidate.pop("document", None)
+                else:
+                    candidate["document"] = selected_target
             proposed = deepcopy(self.parent.steps)
             proposed[self.number] = candidate
             validate_steps(proposed)
+            if self.parent.sources:
+                compile_workflow(proposed, self.parent.sources)
             self.parent.set_steps(proposed)
             self.destroy()
-        except (WorkflowError, ValueError, json.JSONDecodeError) as exc:
-            messagebox.showerror("Invalid step", str(exc), parent=self)
+        except (WorkflowError, ValueError, TypeError, KeyError,
+                json.JSONDecodeError) as exc:
+            messagebox.showerror("Invalid workflow step", str(exc), parent=self)
+
 
 class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("PDFManipulator")
-        self.geometry("1440x920")
-        self.minsize(1120, 720)
+        self.geometry("1540x940")
+        self.minsize(1240, 720)
         self.configure(fg_color=BG)
         self.sources: dict[str, Path] = {}
         self.steps: list[dict] = [{"op": "load", "source": "input1"}]
@@ -245,8 +346,8 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
     def _create_layout(self):
         """Preview-first desktop layout; advanced controls live in a drawer."""
         self.grid_columnconfigure(0, weight=0, minsize=218)
-        self.grid_columnconfigure(1, weight=1, minsize=540)
-        self.grid_columnconfigure(2, weight=0, minsize=0)
+        self.grid_columnconfigure(1, weight=0, minsize=400)
+        self.grid_columnconfigure(2, weight=1, minsize=530)
         self.grid_rowconfigure(1, weight=1)
 
         # Top application bar — only the actions needed on every screen.
@@ -270,7 +371,7 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         ctk.CTkButton(header, text="+ New workflow", width=136, height=39,
                       fg_color=BTN, text_color=TEXT, hover_color=CARD,
                       font=F(13), command=self.new_workflow).pack(side="right", padx=5)
-        self.drawer_button = ctk.CTkButton(header, text="Edit workflow", width=133, height=39,
+        self.drawer_button = ctk.CTkButton(header, text="Hide builder", width=133, height=39,
                                            fg_color=BTN, text_color=TEXT,
                                            hover_color=CARD, font=F(13),
                                            command=self.toggle_inspector)
@@ -278,6 +379,11 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         ctk.CTkButton(header, text="+ Add PDFs", width=112, height=39, fg_color=BTN,
                       text_color=TEXT, hover_color=CARD, font=F(13),
                       command=self.browse_files).pack(side="right", padx=5)
+        self.ai_composer_button = ctk.CTkButton(
+            header, text="AI helper (optional)", width=141, height=39,
+            fg_color="transparent", text_color=MUTED, hover_color=BTN,
+            font=F(12), command=self.toggle_ai_composer)
+        self.ai_composer_button.pack(side="right", padx=(0, 8))
 
         # Narrow library: quiet navigation without stacked editing controls.
         self.sidebar = ctk.CTkFrame(self, width=210, fg_color=SURFACE, corner_radius=14)
@@ -285,8 +391,11 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         self.sidebar.pack_propagate(False)
         ctk.CTkLabel(self.sidebar, text="WORKFLOW LIBRARY", font=F(11, "bold"),
                      text_color=MUTED).pack(anchor="w", padx=17, pady=(23, 12))
-        ctk.CTkLabel(self.sidebar, text="Quick actions", text_color=TEXT,
+        ctk.CTkLabel(self.sidebar, text="Workflow templates", text_color=TEXT,
                      font=F(14, "bold")).pack(anchor="w", padx=17, pady=(0, 5))
+        ctk.CTkLabel(self.sidebar, text="Selecting a template replaces current steps.",
+                     text_color=MUTED, font=F(10), wraplength=170,
+                     justify="left").pack(anchor="w", padx=17, pady=(0, 9))
         self.preset_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
         self.preset_frame.pack(fill="x", padx=9)
         ctk.CTkFrame(self.sidebar, height=1, fg_color=BORDER).pack(fill="x",
@@ -332,12 +441,15 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
 
         # Main workspace: deliberately more room for the document.
         self.mainpane = ctk.CTkFrame(self, fg_color=BG)
-        self.mainpane.grid(row=1, column=1, sticky="nsew", padx=(5, 16), pady=(0, 9))
+        self.mainpane.grid(row=1, column=2, sticky="nsew", padx=(2, 20), pady=(0, 9))
         self.mainpane.grid_columnconfigure(0, weight=1)
         self.mainpane.grid_rowconfigure(2, weight=1)
 
         composer = ctk.CTkFrame(self.mainpane, fg_color=SURFACE, corner_radius=14)
+        self.composer = composer
+        self.ai_composer_visible = False
         composer.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        composer.grid_remove()
         composer.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(composer, text="Describe your changes",
                      font=F(19, "bold"), text_color=TEXT).grid(
@@ -350,7 +462,7 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
                                      text_color=TEXT, font=F(14),
                                      wrap="word", corner_radius=9)
         self.prompt.grid(row=2, column=0, padx=22, sticky="ew")
-        self.prompt.insert("1.0", "Split this PDF every 3 pages")
+        # AI instructions are optional; the manual workflow builder is primary.
         prompt_actions = ctk.CTkFrame(composer, fg_color="transparent")
         prompt_actions.grid(row=3, column=0, sticky="ew", padx=22, pady=(10, 14))
         self.ai_toggle_button = ctk.CTkButton(prompt_actions, text="AI settings",
@@ -418,7 +530,9 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
                       fg_color=BTN, text_color=TEXT, font=F(11),
                       command=self.clear_files).pack(side="right", padx=9, pady=5)
         suggestion = ctk.CTkFrame(self.mainpane, fg_color="transparent")
+        self.suggestion_row = suggestion
         suggestion.grid(row=1, column=0, sticky="ew", pady=(0, 11))
+        suggestion.grid_remove()
         ctk.CTkLabel(suggestion, text="Try", text_color=MUTED,
                      font=F(12)).pack(side="left", padx=(3, 10))
         self.examples_frame = ctk.CTkFrame(suggestion, fg_color="transparent")
@@ -484,27 +598,47 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         self.next_btn.pack(side="right")
 
         # Inspector: visible only when the user chooses to edit workflow details.
-        self.inspector = ctk.CTkScrollableFrame(self, width=314, fg_color=SURFACE,
+        self.inspector = ctk.CTkScrollableFrame(self, width=389, fg_color=SURFACE,
                                                 corner_radius=14)
-        self.inspector.grid(row=1, column=2, sticky="nsew", padx=(0, 20), pady=(0, 9))
-        self.inspector.grid_remove()
-        self.inspector_visible = False
+        self.inspector.grid(row=1, column=1, sticky="nsew", padx=(4, 10), pady=(0, 9))
+        self.inspector_visible = True
         top = ctk.CTkFrame(self.inspector, fg_color="transparent")
         top.pack(fill="x", pady=(9, 17))
-        ctk.CTkLabel(top, text="Workflow details", font=F(17, "bold"),
+        ctk.CTkLabel(top, text="Build your workflow", font=F(19, "bold"),
                      text_color=TEXT).pack(side="left")
-        ctk.CTkButton(top, text="Close", fg_color=BTN, text_color=TEXT,
-                      width=60, height=29, font=F(11),
-                      command=self.toggle_inspector).pack(side="right")
+        ctk.CTkLabel(top, text="MANUAL MODE", text_color=ACCENT,
+                     font=F(10, "bold")).pack(side="right")
         ctk.CTkLabel(self.inspector, text="INPUT FILES", text_color=MUTED,
                      font=F(10, "bold")).pack(anchor="w", pady=(0, 8))
+        self.input_status = ctk.CTkLabel(
+            self.inspector, textvariable=self.files_summary_var,
+            text_color=MUTED, font=F(11), anchor="w",
+            justify="left", wraplength=345)
+        self.input_status.pack(fill="x", pady=(0, 6))
         self.sources_frame = ctk.CTkFrame(self.inspector, fg_color="transparent")
         self.sources_frame.pack(fill="x")
         ctk.CTkButton(self.inspector, text="+ Add files", command=self.browse_files,
                       fg_color=BTN, text_color=TEXT, font=F(12),
-                      height=30).pack(fill="x", pady=(9, 20))
-        ctk.CTkLabel(self.inspector, text="STEPS", text_color=MUTED,
+                      height=30).pack(fill="x", pady=(9, 10))
+        ctk.CTkLabel(self.inspector, text="START WITH", text_color=MUTED,
+                     font=F(10, "bold")).pack(anchor="w", pady=(0, 5))
+        self.start_mode_var = tk.StringVar(value="PDF 1 only")
+        self.start_mode_menu = ctk.CTkOptionMenu(
+            self.inspector, values=list(START_MODES), variable=self.start_mode_var,
+            command=self.change_start_mode, fg_color=BTN, button_color=BORDER,
+            text_color=TEXT, font=F(12), height=36)
+        self.start_mode_menu.pack(fill="x", pady=(0, 4))
+        ctk.CTkLabel(self.inspector,
+                     text="Choose separate PDFs to edit each file before merging.",
+                     text_color=MUTED, font=F(11), wraplength=340,
+                     justify="left").pack(anchor="w", pady=(0, 17))
+        ctk.CTkLabel(self.inspector, text="WORKFLOW STEPS  ·  TOP TO BOTTOM", text_color=MUTED,
                      font=F(10, "bold")).pack(anchor="w")
+        ctk.CTkLabel(self.inspector,
+                     text="For PDF 2 edits, choose PDF 2 in the step settings. "
+                          "Merge edited PDFs only AFTER those edits.",
+                     text_color=MUTED, font=F(11), wraplength=345,
+                     justify="left").pack(anchor="w", pady=(6, 9))
         self.workflow_label = ctk.CTkLabel(self.inspector, text=self.workflow_name,
                                            font=F(15, "bold"), text_color=TEXT,
                                            wraplength=265, justify="left")
@@ -517,20 +651,27 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
                                         fg_color=BTN, button_color=BORDER,
                                         text_color=TEXT, font=F(12), width=172)
         self.add_op.pack(side="left", fill="x", expand=True)
+        self.add_op.set("Delete pages")
         ctk.CTkButton(addrow, text="+ Step", width=74, height=33,
                       font=F(12), fg_color=ACCENT, command=self.add_step).pack(
                           side="right", padx=(8, 0))
+        ctk.CTkButton(self.inspector, text="+ Merge edited PDFs",
+                      fg_color=ACCENT, text_color="#ffffff", font=F(12, "bold"), height=36,
+                      command=lambda: self.add_step("merge_documents")).pack(fill="x", pady=(4, 8))
         ctk.CTkButton(self.inspector, text="+ Insert PDF at position 1",
                       fg_color=BTN, text_color=TEXT, font=F(12), height=32,
                       command=lambda: self.add_step("insert_pdf")).pack(fill="x", pady=(0, 10))
         actions = ctk.CTkFrame(self.inspector, fg_color="transparent")
         actions.pack(fill="x", pady=(3, 21))
         for label, cmd in (("Undo", self.undo), ("Redo", self.redo),
-                           ("Edit JSON", self.edit_json)):
+                           ("Advanced", self.edit_json)):
             ctk.CTkButton(actions, text=label, font=F(11),
                           fg_color=BTN, text_color=TEXT,
                           width=75, height=30, command=cmd).pack(
                               side="left", padx=(0, 5))
+        ctk.CTkButton(self.inspector, text="Save reusable workflow",
+                      fg_color=BTN, text_color=TEXT, font=F(12), height=34,
+                      command=self.save_recipe).pack(fill="x", pady=(0, 13))
         ctk.CTkFrame(self.inspector, height=1, fg_color=BORDER).pack(fill="x",
                           pady=(0, 18))
         ctk.CTkLabel(self.inspector, text="OUTPUT", text_color=MUTED,
@@ -575,15 +716,28 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
     def toggle_inspector(self):
         self.inspector_visible = not self.inspector_visible
         if self.inspector_visible:
+            self.grid_columnconfigure(1, weight=0, minsize=400)
             self.inspector.grid()
-            self.mainpane.grid_configure(padx=(5, 9))
-            self.drawer_button.configure(text="Hide details")
+            self.mainpane.grid_configure(column=2, columnspan=1, padx=(2, 20))
+            self.drawer_button.configure(text="Hide builder")
         else:
             self.inspector.grid_remove()
-            self.mainpane.grid_configure(padx=(5, 16))
-            self.drawer_button.configure(text="Edit workflow")
+            self.grid_columnconfigure(1, weight=0, minsize=0)
+            self.mainpane.grid_configure(column=1, columnspan=2, padx=(5, 20))
+            self.drawer_button.configure(text="Show builder")
         if self.compiled:
             self.after(80, self._render_pages)
+
+    def toggle_ai_composer(self):
+        self.ai_composer_visible = not self.ai_composer_visible
+        if self.ai_composer_visible:
+            self.composer.grid()
+            self.suggestion_row.grid()
+            self.ai_composer_button.configure(text="Hide AI helper")
+        else:
+            self.composer.grid_remove()
+            self.suggestion_row.grid_remove()
+            self.ai_composer_button.configure(text="AI helper (optional)")
 
     def toggle_saved(self):
         if self.saved_area.winfo_manager():
@@ -837,13 +991,60 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         for child in frame.winfo_children():
             child.destroy()
 
+    def _source_mode_step(self, mode: str) -> dict:
+        aliases = list(self.sources) or ["input1"]
+        if mode == "PDF 1 only":
+            return {"op": "load", "source": aliases[0]}
+        if mode == "Edit PDFs separately":
+            return {"op": "load_each", "sources": aliases}
+        if mode == "Merge original PDFs now":
+            if len(aliases) < 2:
+                raise WorkflowError("Add at least two PDFs to merge them.")
+            return {"op": "merge", "sources": aliases}
+        if mode == "Duplex scan pair":
+            if len(aliases) < 2:
+                raise WorkflowError("Duplex scanning requires front and back PDFs.")
+            return {"op": "duplex", "fronts": aliases[0], "backs": aliases[1],
+                    "reverse_backs": True, "rotate_backs": False}
+        raise WorkflowError(f"Unknown input mode: {mode}")
+
+    def change_start_mode(self, mode: str):
+        old = self.steps[0]["op"]
+        old_mode = next((label for label, op in START_MODES.items() if op == old),
+                        "PDF 1 only")
+        try:
+            new_base = self._source_mode_step(mode)
+        except WorkflowError as exc:
+            self.start_mode_var.set(old_mode)
+            self._error(str(exc))
+            return
+        if self.steps[0] == new_base:
+            return
+        if len(self.steps) > 1 and not messagebox.askyesno(
+            "Change starting PDFs",
+            "Changing the starting PDFs resets the later steps because their "
+            "page numbers and targets may change.\n\nReset those steps?",
+            parent=self
+        ):
+            self.start_mode_var.set(old_mode)
+            return
+        self.workflow_name = "Untitled workflow"
+        self.selected_recipe_name = None
+        self.active_document = 0
+        self.selected_page = None
+        self.page_offset = 0
+        self.set_steps([new_base])
+        self.status_var.set(
+            "Starting inputs changed. Add page edits, then Merge edited PDFs "
+            "when you are ready to combine them.")
+
     def _populate_presets(self):
         self._clear_children(self.preset_frame)
         labels = {
             "Duplex Scan Merger": "Duplex scans",
             "Split Every N Pages": "Split PDF",
             "Custom Page Splitter": "Custom splits",
-            "PDF Merger": "Merge PDFs",
+            "PDF Merger": "Merge originals now",
             "Extract Selected Pages": "Extract pages",
             "Reverse Page Order": "Reverse pages",
             "Rotate Scanned Pages": "Rotate pages",
@@ -857,7 +1058,7 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
                           text_color=TEXT if selected else MUTED,
                           hover_color=CARD, corner_radius=8, height=35,
                           font=F(12, "bold" if selected else "normal"),
-                          command=lambda n=name: self.load_recipe(preset(n))).pack(
+                          command=lambda n=name: self.load_recipe(preset(n), confirm=True)).pack(
                               fill="x", pady=1)
 
     def _populate_recipes(self):
@@ -874,8 +1075,7 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
                               fill="x", pady=2)
 
     def select_recipe(self, name):
-        self.selected_recipe_name = name
-        self.load_recipe(self.recipes[name])
+        self.load_recipe(self.recipes[name], confirm=True)
 
     def duplicate_recipe(self):
         name = self.selected_recipe_name
@@ -952,6 +1152,10 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
     def _populate_steps(self):
         self._clear_children(self.step_frame)
         self.workflow_label.configure(text=self.workflow_name)
+        current_mode = next((label for label, op in START_MODES.items()
+                             if self.steps and self.steps[0]["op"] == op), None)
+        if current_mode:
+            self.start_mode_var.set(current_mode)
         self._populate_presets()
         for i, step in enumerate(self.steps):
             item = ctk.CTkFrame(self.step_frame, fg_color=CARD, corner_radius=9)
@@ -960,14 +1164,30 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
             top.pack(fill="x", padx=10, pady=(10, 3))
             ctk.CTkLabel(top, text=f"{i+1:02d}", text_color=ACCENT,
                          width=24, font=F(12, "bold")).pack(side="left", padx=(0, 6))
-            ctk.CTkLabel(top, text=step["op"].replace("_", " ").title(),
+            step_title = {
+                "load": "Start · PDF 1",
+                "load_each": "Start · PDFs separately",
+                "merge": "Start · Merge originals",
+                "duplex": "Start · Duplex scans",
+                "merge_documents": "Merge edited PDFs",
+            }.get(step["op"], step["op"].replace("_", " ").title())
+            ctk.CTkLabel(top, text=step_title,
                          text_color=TEXT, font=F(12, "bold"),
                          anchor="w").pack(side="left", fill="x", expand=True)
-            ctk.CTkButton(top, text="Edit", fg_color=BTN, text_color=TEXT,
-                          font=F(11), width=42, height=25,
-                          command=lambda j=i: StepDialog(self, j)).pack(side="right")
-            ctk.CTkLabel(item, text=describe(step), text_color=MUTED,
-                         wraplength=258, font=F(11), justify="left").pack(
+            if i > 0:
+                ctk.CTkButton(top, text="Edit", fg_color=BTN, text_color=TEXT,
+                              font=F(11), width=42, height=25,
+                              command=lambda j=i: StepDialog(self, j)).pack(side="right")
+            details = describe(step)
+            if "document" in step:
+                doc_number = step["document"] + 1
+                name = list(self.sources.values())[step["document"]].name if (
+                    step["document"] < len(self.sources) and self.steps[0]["op"] == "load_each") else ""
+                details += f"\nApplies to PDF {doc_number}" + (f" — {name}" if name else "")
+            elif i > 0 and step["op"] in DOCUMENT_ACTIONS:
+                details += "\nApplies to all current PDF outputs"
+            ctk.CTkLabel(item, text=details, text_color=MUTED,
+                         wraplength=330, font=F(11), justify="left").pack(
                              fill="x", anchor="w", padx=13, pady=(0, 7))
             if i > 0:
                 controls = ctk.CTkFrame(item, fg_color="transparent")
@@ -1036,9 +1256,13 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         if len(names) > 4:
             summary += f"  •  +{len(names)-4} more"
         if (len(self.sources) > 1 and self.steps
+                and self.steps[0].get("op") == "load_each"
+                and not any(step.get("op") == "merge_documents" for step in self.steps)):
+            summary += "  |  PDFs are separate: edit PDF 1/PDF 2, then Merge edited PDFs."
+        elif (len(self.sources) > 1 and self.steps
                 and self.steps[0].get("op") == "load"
-                and all(step.get("op") != "insert_pdf" for step in self.steps)):
-            summary += "  |  Choose Merge PDFs or Insert PDF to include the others."
+                and not any(step.get("op") == "insert_pdf" for step in self.steps)):
+            summary += "  |  Only PDF 1 is active. Choose another Start with mode."
         self.files_summary_var.set(summary)
 
     def add_files(self, paths):
@@ -1066,6 +1290,18 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
             self.sources[alias] = path
             imported.append(f"{alias}: {path.name}")
             existing.add(path)
+        if imported and self.steps:
+            first = self.steps[0]
+            if (self.workflow_name == "Untitled workflow" and len(self.steps) == 1
+                    and first["op"] in ("load", "load_each")):
+                # A manual workflow starts with each PDF independently, preventing
+                # unintended deletions from an already merged document.
+                self.steps = [{"op": "load_each", "sources": list(self.sources)}] \
+                    if len(self.sources) > 1 else [{"op": "load", "source": "input1"}]
+                self._populate_steps()
+            elif first["op"] == "load_each":
+                self.steps[0] = {"op": "load_each", "sources": list(self.sources)}
+                self._populate_steps()
         self._populate_sources()
         self._refresh_suggestions()
         self._update_import_banner()
@@ -1130,12 +1366,20 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         self._update_import_banner()
         self.preview()
 
-    def load_recipe(self, recipe):
+    def load_recipe(self, recipe, *, confirm: bool = False):
+        if confirm and (len(self.steps) > 1 or self.selected_recipe_name):
+            if not messagebox.askyesno(
+                "Replace current workflow",
+                "Open this template or saved workflow? Your current unsaved "
+                "steps will be replaced; imported PDFs will remain available.",
+                parent=self):
+                return
         try:
             checked = validate_recipe(recipe)
             if checked["name"] in ("PDF Merger", "Batch PDF Organizer") and len(self.sources) > 1:
                 checked["steps"][0]["sources"] = list(self.sources)
             self.workflow_name = checked["name"]
+            self.selected_recipe_name = checked["name"] if checked["name"] in self.recipes else None
             self.status_var.set(f"Selected workflow: {self.workflow_name}")
             self.filename_pattern.set(checked["pattern"])
             self.set_steps(checked["steps"])
@@ -1174,26 +1418,45 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         self.preview()
         self.status_var.set("New workflow created. Add PDF files or choose a quick action.")
 
-    def add_step(self, operation: str | None = None):
+    def add_step(self, operation: str | None = None, *, open_editor: bool = True):
+        """Append a manually configured operation to the currently visible plan."""
         op = operation or STEP_OPTIONS[self.add_op.get()]
-        if op in ("merge", "insert_pdf") and len(self.sources) < 2:
-            self._error("Import at least two PDFs before merging or inserting another PDF.")
+        if not self.sources:
+            self._error("Import your PDFs first, then choose an operation.")
             return
-        step = {"op": op, **deepcopy(OP_DEFAULTS[op])}
-        if op == "merge":
-            # Merging as a base operation; for later insertions use insert_pdf.
-            step["sources"] = list(self.sources)
-            self.set_steps([step] + self.steps[1:])
-            self.status_var.set("Merge PDFs: the source files are combined in import order.")
-            return
-        if op == "insert_pdf":
-            step["source"] = list(self.sources)[1]
-            step["position"] = 1
-            step["document"] = self.active_document
-        if op == "reorder" and self.compiled and self.compiled.documents:
-            step["order"] = list(range(1, len(self.compiled.documents[self.active_document].pages) + 1))
-            step["document"] = self.active_document
+        if op == "merge_documents":
+            if not self.compiled or len(self.compiled.documents) < 2:
+                self._error(
+                    "To merge PDFs after editing them, choose 'Edit PDFs separately' "
+                    "under Start with, then add your page edits first.")
+                return
+            step = {"op": op, "order": list(range(1, len(self.compiled.documents) + 1))}
+        else:
+            if op == "insert_pdf" and len(self.sources) < 2:
+                self._error("Import another PDF before inserting one.")
+                return
+            step = {"op": op, **deepcopy(OP_DEFAULTS[op])}
+            if op == "insert_pdf":
+                step["source"] = list(self.sources)[1]
+                step["position"] = 1
+            if op in DOCUMENT_ACTIONS and self.compiled:
+                # Explicitly bind each edit to the currently selected output,
+                # not an accidentally merged document.
+                if len(self.compiled.documents) > 1:
+                    step["document"] = self.active_document
+                if op == "reorder":
+                    step["order"] = list(
+                        range(1, len(self.compiled.documents[self.active_document].pages) + 1))
+                if op in ("delete", "extract", "duplicate") and self.selected_page is not None:
+                    step["pages"] = str(self.selected_page + 1)
+        old_count = len(self.steps)
         self.set_steps(self.steps + [step])
+        if len(self.steps) != old_count + 1:
+            return
+        self.status_var.set(f"Added step {len(self.steps)}: {op.replace('_', ' ')}. "
+                            "Use Edit to adjust the selected PDF and page numbers.")
+        if open_editor and op in DOCUMENT_ACTIONS:
+            self.after(75, lambda index=old_count: StepDialog(self, index))
 
     def move_step(self, index, delta):
         dest = index + delta

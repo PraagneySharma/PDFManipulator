@@ -51,11 +51,12 @@ _ALLOWED: dict[str, set[str]] = {
     "load": {"source"},
     "load_each": {"sources"},
     "merge": {"sources"},
+    "merge_documents": {"order"},
     "insert_pdf": {"source", "position", "document"},
     "duplex": {"fronts", "backs", "reverse_backs", "rotate_backs", "skip_first_back"},
     "interleave": {"sources", "reverse_second"},
-    "split_every": {"n"},
-    "split_ranges": {"ranges", "include_remaining"},
+    "split_every": {"n", "document"},
+    "split_ranges": {"ranges", "include_remaining", "document"},
     "extract": {"pages", "document"},
     "delete": {"pages", "document"},
     "reorder": {"order", "document"},
@@ -149,6 +150,10 @@ def validate_steps(steps: Any) -> list[dict[str, Any]]:
                 raise WorkflowError(f"Step {i}: sources must list input aliases.")
             if op == "interleave" and len(names) != 2:
                 raise WorkflowError("Interleave requires exactly two sources.")
+        if op == "merge_documents" and "order" in step:
+            order = step["order"]
+            if not isinstance(order, list) or not order or any(type(item) is not int or item < 1 for item in order):
+                raise WorkflowError("Merge order must be a list of positive, 1-based output numbers.")
         if op == "split_every":
             _positive_int(step.get("n"), "Split size")
         if op == "rotate":
@@ -311,7 +316,18 @@ def compile_workflow(
                 if i < len(back):
                     combined.append(back[i])
             documents = [Document(combined, "duplex")]
+        elif op == "merge_documents":
+            if len(documents) < 2:
+                raise WorkflowError("Merge edited PDFs needs at least two separate documents. Choose 'PDFs separately' first.")
+            order = step.get("order", list(range(1, len(documents) + 1)))
+            if len(order) != len(documents) or sorted(order) != list(range(1, len(documents) + 1)):
+                raise WorkflowError("Merge order must list each current PDF exactly once, using 1-based numbers.")
+            combined = [page for number in order for page in documents[number - 1].pages]
+            documents = [Document(combined, "merged")]
         else:
+            if "document" in step and step["document"] >= len(documents):
+                raise WorkflowError(f"Step {position + 1} targets PDF {step['document'] + 1}, "
+                                    f"but only {len(documents)} document(s) exist at this step.")
             next_documents: list[Document] = []
             for index, doc in enumerate(documents):
                 if cancel is not None and cancel.is_set():

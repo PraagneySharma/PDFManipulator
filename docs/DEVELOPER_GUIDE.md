@@ -24,7 +24,7 @@ Or double-click `Start PDFManipulator.bat` to automate the first two commands. T
 .\.venv\Scripts\python.exe -m tests.smoke_ui
 ~~~
 
-The GUI smoke test exercises file-import feedback, single-page deletion, responsive zoom, the New workflow button, two-PDF insertion, and Save As. The last test needs a graphical Windows desktop. PDF test documents are generated during tests and never committed. The ChatGPT auth and inference tests simulate authorization; live account sign-in requires a human to approve the browser flow.
+The GUI smoke test exercises the manual-first layout, PDF-specific deletion, post-edit merging, responsive zoom, Save As, and the optional AI panel. The last test needs a graphical Windows desktop. PDF test documents are generated during tests and never committed. The ChatGPT auth and inference tests simulate authorization; live account sign-in requires a human to approve the browser flow.
 
 ## Build a portable Windows EXE
 
@@ -79,15 +79,17 @@ A recipe is validated JSON with `name`, `pattern`, and `steps`. The first step m
 }
 ~~~
 
-Other supported operations include `load`, `load_each`, `duplex`, `interleave`, `insert_pdf`, `split_ranges`, `extract`, `delete`, `reorder`, `reverse`, `rotate`, `duplicate` and `remove_blanks`. `insert_pdf` is a post-load operation with `source`, `position` (1-based integer or `end`), and optional `document` index. For example:
+Other supported operations include `load`, `load_each`, `duplex`, `interleave`, `merge_documents`, `insert_pdf`, `split_ranges`, `extract`, `delete`, `reorder`, `reverse`, `rotate`, `duplicate` and `remove_blanks`. Manual workflows should use **`load_each`** to keep imported PDFs separate, apply edits with a **zero-based** `document` selector (so `document: 1` targets PDF 2), then use **`merge_documents`** to combine the edited output documents. Merge order is **one-based** and includes each current document exactly once. For example:
 
 ~~~json
 [
-  {"op": "load", "source": "input1"},
-  {"op": "delete", "pages": "1"},
-  {"op": "insert_pdf", "source": "input2", "position": 1}
+  {"op": "load_each", "sources": ["input1", "input2"]},
+  {"op": "delete", "pages": "1", "document": 1},
+  {"op": "merge_documents", "order": [1, 2]}
 ]
 ~~~
+
+`insert_pdf` is still supported as a post-load operation for inserting an untouched source PDF at a 1-based page position or `end`. The UI opens with the manual workflow builder visible and hides the optional AI composer until requested.
 
 See `pdfmanipulator/engine.py` for exact validation rules.
 

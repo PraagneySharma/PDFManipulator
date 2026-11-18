@@ -1,5 +1,11 @@
-# Build a portable Windows GUI executable from the project virtual environment.
-# Usage from project root: powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
+# Build a standalone Windows GUI executable from the project's virtual environment.
+# Usage: powershell -NoProfile -ExecutionPolicy Bypass -File packaging\build_windows.ps1
+# To build while the old EXE is open: add -Name PDFManipulator-Updated
+param(
+    [ValidateSet("PDFManipulator", "PDFManipulator-Updated")]
+    [string]$Name = "PDFManipulator"
+)
+
 $ErrorActionPreference = "Stop"
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $root
@@ -9,12 +15,13 @@ if (-not (Test-Path $python)) {
 }
 & $python "packaging\create_icon.py"
 if ($LASTEXITCODE -ne 0) { throw "Icon generation failed." }
+
 $arguments = @(
     "-m", "PyInstaller",
     "--noconfirm",
     "--onefile",
     "--windowed",
-    "--name", "PDFManipulator",
+    "--name", $Name,
     "--icon", (Join-Path $root "packaging\pdf_manipulator.ico"),
     "--collect-data", "customtkinter",
     "--collect-all", "tkinterdnd2",
@@ -27,7 +34,8 @@ $arguments = @(
 )
 & $python @arguments
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed." }
-$exe = Join-Path $root "dist\PDFManipulator.exe"
+
+$exe = Join-Path $root ("dist\" + $Name + ".exe")
 if (-not (Test-Path $exe)) { throw "Expected executable not found: $exe" }
 Write-Output "Built: $exe"
-Get-Item $exe | Select-Object Name,Length,LastWriteTime
+Get-Item $exe | Select-Object Name, Length, LastWriteTime

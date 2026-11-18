@@ -15,14 +15,18 @@ from .parser import interpret, two_pdf_request
 SYSTEM_PROMPT = """Translate the user's PDF instruction into a JSON object with a 'steps' array.
 No code, no markdown, no comments. A step is an object with 'op' and parameters.
 Allowed operations: load(source), load_each(sources), merge(sources),
-insert_pdf(source,position,document),
+merge_documents(order), insert_pdf(source,position,document),
 duplex(fronts,backs,reverse_backs,rotate_backs,skip_first_back),
 interleave(sources,reverse_second), split_every(n),
 split_ranges(ranges,include_remaining), extract(pages), delete(pages),
 reorder(order), reverse(), rotate(pages,degrees), duplicate(pages,times),
 remove_blanks(threshold).
-First step must load/merge/duplex/interleave/load_each. After deleting pages,
-use insert_pdf to insert another PDF into the current document. The position
+First step must load/merge/duplex/interleave/load_each. For edits to PDF 2
+before merging with PDF 1, start with load_each([input1,input2]), apply
+delete(pages='1',document=1) where document is a ZERO-BASED PDF index,
+then merge_documents(order=[1,2]), with ONE-BASED merge order. Do not merge
+originals first if the instruction targets a particular source PDF.
+For inserting an unchanged PDF into another, The position
 is 1 for the beginning or 'end' to append. Never use merge() after the first
 step. Preserve ALL user-requested operations in order: for example, deleting
 page 1 of input1 then putting input2 first requires load(input1), delete(1),

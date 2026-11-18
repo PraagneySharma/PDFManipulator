@@ -10,73 +10,80 @@
 
 The batch launcher automatically opens `dist\PDFManipulator.exe` when that file is present; otherwise it runs the Python source.
 
-## 2. Add your PDFs
+## 2. Import the PDFs
 
-Select **+ Add PDFs** or drag PDF files into the app. A visible import bar lists the number of PDFs and each input alias (`input1`, `input2`, etc.), so you can confirm both files are present and in the intended order. Use **Clear inputs** to remove them from the current workflow without deleting the files from your computer.
+Use **+ Add PDFs** in the header or in the middle workflow builder. Imported files are shown as **PDF 1**, **PDF 2**, etc., with their filenames and import order. Originals are never changed by the preview.
 
-Choose a preset under **Quick actions**, or type a request in **Describe your changes** and select **Build workflow**.
+Choose a **Start with** mode:
 
-For example:
+- **Edit PDFs separately** — the default for two or more PDFs added to a new workflow. Each imported document stays independent while you edit its pages
+- **PDF 1 only** — use only the first PDF, then optionally insert another source later
+- **Merge original PDFs now** — combine the untouched files *before* the following steps
+- **Duplex scan pair** — interleave front/back scans using the duplex workflow
 
-- “Combine these PDFs into one document”
-- “Split this PDF every 3 pages”
-- “Rotate even pages 180 degrees”
-- “Extract pages 1-5”
-- “Remove blank pages”
+For a deletion *from the second PDF*, keep **Edit PDFs separately**. Choosing **Merge original PDFs now** first changes what page 1 means.
 
-The offline parser understands a constrained set of instructions. If it cannot interpret a request safely, edit the workflow manually, choose a preset, or enable an optional AI provider.
+## 3. Build your workflow manually
 
-## 3. Preview and edit
+The **Build your workflow** editor is visible automatically in the middle column. There is no separate editing drawer to open.
 
-The **Document preview** displays thumbnails of the proposed output. Your requested changes are a *preview* until you save. At 100% zoom, six pages fit in a row. Zooming in increases each page's width and height, so fewer pages fit per row.
+1. Import the PDF files and choose **Start with**.
+2. In **Workflow steps**, choose **Delete pages**, **Rotate pages**, **Extract pages**, **Split every N pages**, or another operation from the dropdown.
+3. Click **+ Step**. The **Configure workflow step** dialog opens.
+4. Under **Apply changes to**, choose **PDF 1**, **PDF 2**, or **All current PDFs**, as appropriate.
+5. Set the page selection (e.g., `1`, `2-5`, `even` or `all`) and click **Apply step**.
+6. Add more steps as needed; use the ↑/↓ arrows to reorder them.
+7. **When you are done editing the separate PDFs**, click **+ Merge edited PDFs**. This creates one output, with PDF 1 first by default.
+8. Check the live preview on the right, then click **Save as PDF**.
 
-- **Edit workflow** opens the side panel to review and modify steps, input files, output names, and undo/redo.
-- **Compare originals** shows the input preview.
-- Use **+ / −** zoom to inspect pages.
-- Click a page thumbnail to select it, then choose **Delete page** or **Rotate** above the preview. Drag thumbnails to reorder.
-- Click **+ New workflow** in the top bar to start from a blank workspace without deleting saved workflows.
-- You can save reusable workflows and import/export their recipe JSON.
+You can select **Save reusable workflow** to store a recipe or **+ New workflow** to start from a clean workspace. Presets on the left are templates that replace the current steps after confirmation.
 
-**Do not export until the displayed page order is correct.** The blank-page detector is conservative and can misclassify faint markings.
+### Example: delete page 1 from PDF 2, then merge with PDF 1 first
 
-## 4. Common tasks
+Suppose PDF 1 contains A1, A2 and A3, while PDF 2 contains B1, B2 and B3. You want the final order to be **A1, A2, A3, B2, B3**.
 
-### Merge several PDFs
+1. Add PDF 1 and PDF 2 in that order.
+2. Keep **Start with → Edit PDFs separately**.
+3. Choose **Delete pages** from the operation dropdown and click **+ Step**.
+4. Choose **Apply changes to → PDF 2**; enter **1** as the page number; click **Apply step**.
+5. Click **+ Merge edited PDFs**. The default merge order is PDF 1, then the modified PDF 2.
+6. Verify the preview. Click **Save as PDF** to choose the new filename.
 
-Add the files in the intended order → choose **Merge PDFs** from Quick actions → inspect the preview → **Save as PDF**. This merges all currently imported PDFs in their import order.
+This creates the following ordered steps:
 
-### Combine front and back scans (duplex)
+~~~json
+[
+  {"op": "load_each", "sources": ["input1", "input2"]},
+  {"op": "delete", "pages": "1", "document": 1},
+  {"op": "merge_documents", "order": [1, 2]}
+]
+~~~
 
-1. Scan front sides in ascending page order (1, 3, 5, …).
-2. Flip the paper stack and scan the backs (normally in descending order).
-3. Add both PDFs, with the front-side file first.
-4. Choose **Duplex Scan Merger**, and inspect the interleaved result.
-5. If back pages are upside-down or in ascending order, choose **Edit workflow** to change the reverse/rotation settings.
-6. Export the result.
+The numeric `document` field is **zero-based internally**. The graphical editor instead displays human labels such as **PDF 2**, so you don't need to work with JSON.
 
-### Insert a PDF after other edits
+### Insert an entire PDF at a position
 
-Add both PDFs, then choose **Edit workflow** → **+ Insert PDF at position 1**. The resulting **Insert PDF** step places every page of `input2` at the beginning of the current output. Edit that step's **position** to a different 1-based page number, or type `end` to append the PDF.
+If you want to place the original PDF 2 within PDF 1 without separately editing PDF 2, use **PDF 1 only → + Insert PDF at position 1**. In the editor, select which imported PDF to insert and specify the position: `1` for the beginning, a larger page number for the middle, or `end` to append it.
 
-For the request *“Delete the first Page of the first PDF. Add the second PDF to the first PDF and make sure the second PDF is page 1”*, enter the instruction and select **Build workflow**. The resulting steps are **Load first PDF → Delete page 1 → Insert second PDF at position 1**. Review all pages before saving.
+### Duplex scanning
 
-### Split a document
+Import front and back scans, then choose **Start with → Duplex scan pair**. Inspect the sequence in the preview; adjust reversal and rotation in the advanced editor if needed.
 
-Add a PDF → choose **Split Every N Pages** → adjust the number under **Edit workflow** → inspect each output → export.
+## 4. Review the output
 
-### Extract or delete pages
+The preview on the right shows the current PDF pages. At 100% zoom, six thumbnail columns fit across the available area; zooming in enlarges pages and reduces columns.
 
-Click a page thumbnail, then choose **Delete page** in the preview toolbar, or add a **Delete** step through **Edit workflow**. Page selectors are **1-based**, using forms such as `1,3,5-8`, `even`, `odd`, and `all`.
+Click a thumbnail to delete or rotate that page. For other edits, use the **Workflow steps** list. Some changes, such as removing blank pages, should always be reviewed carefully.
 
-### Remove blank pages
-
-Choose **Remove Blank Pages**, inspect the output, and restore any pages that were incorrectly classified before exporting.
+If your workflow creates multiple output PDFs, switch between their tabs in the preview. After **Merge edited PDFs**, the preview shows one combined output instead.
 
 ## 5. Save the result
 
-Click **Save as PDF** in the top-right. For a single output, a **Save As** dialog lets you choose both the folder and filename. For multiple outputs, choose the destination folder and review the generated filenames. If batch filenames already exist, the app proposes unused versioned filenames. The app never overwrites existing PDFs.
+Click **Save as PDF**. For one output, choose its filename and folder using the Save As dialog. For multiple outputs, choose a folder; the app proposes unused filenames when names would otherwise collide. Existing outputs and imported sources are never overwritten.
 
-Source PDF documents are never modified.
+## Optional AI helper
+
+Manual mode is the default. To see the instruction composer and AI providers, click **AI helper (optional)** in the top bar. Once an AI produces steps, you can review and edit them in the same manual builder. The AI panel can be hidden again at any time.
 
 ## Optional AI instructions
 
