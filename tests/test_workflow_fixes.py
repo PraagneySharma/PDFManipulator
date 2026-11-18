@@ -8,7 +8,7 @@ from pypdf import PdfReader, PdfWriter
 from pdfmanipulator.ai import parse_model_steps, translate
 from pdfmanipulator.engine import WorkflowError, compile_workflow, execute_workflow
 from pdfmanipulator.exports import next_available_pattern
-from pdfmanipulator.layout import thumbnail_layout
+from pdfmanipulator.layout import thumbnail_layout, fit_image_size, output_tab_title
 from pdfmanipulator.parser import interpret
 
 
@@ -124,12 +124,41 @@ class PDFEditingRegressions(unittest.TestCase):
     def test_zoom_increases_both_dimensions_and_reduces_columns(self):
         base = thumbnail_layout(960, 1.0)
         zoomed = thumbnail_layout(960, 1.4)
-        self.assertEqual(base[0], 6)
+        self.assertEqual(base[0], 3)  # Readable whole pages, not six tiny slices.
         self.assertLess(zoomed[0], base[0])
         self.assertGreater(zoomed[1], base[1])
         self.assertGreater(zoomed[2], base[2])
-        self.assertEqual(thumbnail_layout(480, 1.0)[0], 6)
-        self.assertGreaterEqual(thumbnail_layout(960, 0.7)[0], 6)
+        self.assertEqual(thumbnail_layout(480, 1.0)[0], 2)
+        self.assertGreaterEqual(thumbnail_layout(960, 0.7)[0], base[0])
+
+    def test_full_page_fit_preserves_tall_portrait_and_landscape_aspect(self):
+        for page_width, page_height in ((612, 792), (612, 1008), (1008, 612), (450, 1400)):
+            with self.subTest(page=(page_width, page_height)):
+                result_width, result_height = fit_image_size(
+                    page_width, page_height, max_width=580, max_height=520)
+                self.assertLessEqual(result_width, 580)
+                self.assertLessEqual(result_height, 520)
+                self.assertAlmostEqual(result_width / result_height,
+                                       page_width / page_height, delta=0.012)
+                self.assertGreater(result_width, 0)
+                self.assertGreater(result_height, 0)
+
+    def test_preview_tabs_show_original_names_not_output_numbers(self):
+        comp = compile_workflow([
+            {"op": "load_each", "sources": ["input1", "input2"]}
+        ], self.sources)
+        labels = [output_tab_title(i, doc, self.sources, len(comp.documents))
+                  for i, doc in enumerate(comp.documents)]
+        self.assertIn("PDF 1", labels[0])
+        self.assertIn("first.pdf", labels[0])
+        self.assertIn("PDF 2", labels[1])
+        self.assertIn("second.pdf", labels[1])
+        self.assertFalse(any("Output" in label for label in labels))
+        merged = compile_workflow([
+            {"op": "merge", "sources": ["input1", "input2"]}
+        ], self.sources)
+        self.assertIn("Combined PDF", output_tab_title(
+            0, merged.documents[0], self.sources, 1))
 
 
 if __name__ == "__main__":

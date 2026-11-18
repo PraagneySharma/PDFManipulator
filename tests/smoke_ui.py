@@ -31,7 +31,8 @@ def main():
 
         app = StudioApp()
         app.update()
-        assert app.inspector_visible, "Workflow builder must open by default."
+        assert app.inspector_visible, "Workflow editor must open by default."
+        assert not app.sidebar_visible, "Template library must not crowd the main view."
         assert app.inspector._parent_frame.winfo_manager() == "grid"
         assert not app.composer.winfo_manager(), "AI must be optional and hidden."
         assert app.start_mode_var.get() == "PDF 1 only"
@@ -43,6 +44,18 @@ def main():
         assert app.start_mode_var.get() == "Edit PDFs separately"
         assert app.compiled and len(app.compiled.documents) == 2
         assert "2 PDFs imported" in app.files_summary_var.get()
+        assert app.active_document == 1, "Imported PDF 2 should be shown immediately."
+        assert "PDF 2" in app.preview_name_var.get(), app.preview_name_var.get()
+        assert second.name in app.preview_name_var.get()
+        app.view_source_pdf("input1")
+        assert app.active_document == 0
+        assert "PDF 1" in app.preview_name_var.get()
+        app.view_source_pdf("input2")
+        assert app.active_document == 1
+        app.toggle_sidebar()
+        assert app.sidebar_visible
+        app.toggle_sidebar()
+        assert not app.sidebar_visible
         assert first.name in app.files_summary_var.get()
         assert second.name in app.files_summary_var.get()
 
@@ -52,16 +65,42 @@ def main():
         app.zoom_var.set("100%")
         app.update()
         app._render_pages()
+        app.update()
         assert app.compiled and app.compiled.page_count == 6
         cards = [child for child in app.page_list.winfo_children()
                  if hasattr(child, "page_index")]
-        assert len({card.grid_info()["column"] for card in cards}) == 6, (
-            "Six columns must fit at default zoom")
+        default_columns = len({card.grid_info()["column"] for card in cards})
+        assert 2 <= default_columns <= 4, (
+            f"Pages must be readable and fit on screen, got {default_columns} columns")
+        viewport = app.page_list._parent_canvas
+        assert max(card.winfo_rootx() + card.winfo_width() for card in cards) <= (
+            viewport.winfo_rootx() + viewport.winfo_width() + 6), (
+                "Thumbnail cards spill beyond the visible preview at Windows DPI scale")
         app.change_zoom(0.4)
         app.update()
         cards = [child for child in app.page_list.winfo_children()
                  if hasattr(child, "page_index")]
-        assert len({card.grid_info()["column"] for card in cards}) < 6
+        assert len({card.grid_info()["column"] for card in cards}) < default_columns
+        assert max(card.winfo_rootx() + card.winfo_width() for card in cards) <= (
+            viewport.winfo_rootx() + viewport.winfo_width() + 6), (
+                "Zoomed-in cards must fit within viewer width")
+        app.toggle_fit_page()
+        app.update()
+        assert app.fit_full_page
+        assert "Fit" in app.zoom_var.get()
+        assert app.image_refs, "Fit mode must display complete page images."
+        fitted_width, fitted_height = app.image_refs[0]._size
+        from customtkinter import ScalingTracker
+        scale = ScalingTracker.get_widget_scaling(app)
+        viewport_width = app.page_list._parent_canvas.winfo_width() / scale
+        viewport_height = app.page_list._parent_canvas.winfo_height() / scale
+        assert fitted_width <= viewport_width, (
+            "Fit page exceeds preview width")
+        assert fitted_height <= max(170, int(viewport_height - 65)), (
+            f"Fit page ({fitted_height}) exceeds visible viewer height "
+            f"({viewport_height})")
+        app.toggle_fit_page()
+        assert not app.fit_full_page
         app.change_zoom(-0.4)
 
         # Switch back to individual PDF editing.
@@ -89,6 +128,13 @@ def main():
         assert [step["op"] for step in app.steps] == [
             "load_each", "delete", "merge_documents"], app.steps
         assert app.compiled and len(app.compiled.documents) == 1
+        assert "Combined PDF" in app.preview_name_var.get()
+        app.view_source_pdf("input2")
+        assert "ORIGINAL PDF 2" in app.preview_name_var.get()
+        assert app.source_view_alias == "input2"
+        app.show_edited_result()
+        assert app.source_view_alias is None
+        assert "Combined PDF" in app.preview_name_var.get()
         assert [(p.source, p.index) for p in app.compiled.documents[0].pages] == [
             ("input1", 0), ("input1", 1), ("input1", 2),
             ("input2", 1), ("input2", 2)]

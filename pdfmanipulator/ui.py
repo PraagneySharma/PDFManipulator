@@ -22,7 +22,7 @@ from .chatgpt import ChatGPTConnection, ChatGPTError, USAGE_URL
 from .engine import Compilation, PageRef, WorkflowError, compile_workflow, execute_workflow, output_names, validate_steps
 from .exports import next_available_pattern
 from .parser import EXAMPLES
-from .layout import thumbnail_layout
+from .layout import thumbnail_layout, fit_image_size, output_tab_title
 from .previews import image_for
 from .recipes import PRESETS, export_recipe, import_recipe, preset, read_recipes, save_recipes, validate_recipe
 
@@ -286,8 +286,16 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         self.active_document = 0
         self.page_offset = 0
         self.zoom_scale = 1.0
+        self.fit_full_page = False
         self.zoom_var = tk.StringVar(value="100%")
         self.files_summary_var = tk.StringVar(value="No PDFs imported yet")
+        self.preview_name_var = tk.StringVar(value="No PDF selected")
+        self.active_source_alias: str | None = None
+        self.source_view_alias: str | None = None
+        self.source_view_compilation: Compilation | None = None
+        self.edit_target_var = tk.StringVar(value="Import a PDF to start")
+        self.edit_target_map: dict[str, int] = {}
+        self.sidebar_visible = False
         self._page_resize_job = None
         self._rendered_area_width = 0
         self.selected_page: int | None = None
@@ -313,6 +321,7 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         self.chatgpt_model_names: dict[str, str] = {}
         self.consent_var = tk.BooleanVar(value=logged_in)
         self._create_layout()
+        self._arrange_workspace()
         self._populate_presets()
         self._populate_recipes()
         self._populate_sources()
@@ -345,9 +354,9 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
 
     def _create_layout(self):
         """Preview-first desktop layout; advanced controls live in a drawer."""
-        self.grid_columnconfigure(0, weight=0, minsize=218)
-        self.grid_columnconfigure(1, weight=0, minsize=400)
-        self.grid_columnconfigure(2, weight=1, minsize=530)
+        self.grid_columnconfigure(0, weight=0, minsize=0)
+        self.grid_columnconfigure(1, weight=1, minsize=550)
+        self.grid_columnconfigure(2, weight=0, minsize=0)
         self.grid_rowconfigure(1, weight=1)
 
         # Top application bar — only the actions needed on every screen.
@@ -371,7 +380,7 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         ctk.CTkButton(header, text="+ New workflow", width=136, height=39,
                       fg_color=BTN, text_color=TEXT, hover_color=CARD,
                       font=F(13), command=self.new_workflow).pack(side="right", padx=5)
-        self.drawer_button = ctk.CTkButton(header, text="Hide builder", width=133, height=39,
+        self.drawer_button = ctk.CTkButton(header, text="Hide editor", width=118, height=39,
                                            fg_color=BTN, text_color=TEXT,
                                            hover_color=CARD, font=F(13),
                                            command=self.toggle_inspector)
@@ -384,12 +393,18 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
             fg_color="transparent", text_color=MUTED, hover_color=BTN,
             font=F(12), command=self.toggle_ai_composer)
         self.ai_composer_button.pack(side="right", padx=(0, 8))
+        self.templates_button = ctk.CTkButton(
+            header, text="Templates & saved", width=144, height=39,
+            fg_color=BTN, text_color=TEXT, hover_color=CARD,
+            font=F(12), command=self.toggle_sidebar)
+        self.templates_button.pack(side="right", padx=(0, 8))
 
         # Narrow library: quiet navigation without stacked editing controls.
         self.sidebar = ctk.CTkFrame(self, width=210, fg_color=SURFACE, corner_radius=14)
         self.sidebar.grid(row=1, column=0, sticky="nsew", padx=(22, 9), pady=(0, 9))
+        self.sidebar.grid_remove()
         self.sidebar.pack_propagate(False)
-        ctk.CTkLabel(self.sidebar, text="WORKFLOW LIBRARY", font=F(11, "bold"),
+        ctk.CTkLabel(self.sidebar, text="OPTIONAL TOOLS", font=F(11, "bold"),
                      text_color=MUTED).pack(anchor="w", padx=17, pady=(23, 12))
         ctk.CTkLabel(self.sidebar, text="Workflow templates", text_color=TEXT,
                      font=F(14, "bold")).pack(anchor="w", padx=17, pady=(0, 5))
@@ -543,46 +558,60 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         canvas = ctk.CTkFrame(self.mainpane, fg_color=SURFACE, corner_radius=14)
         canvas.grid(row=2, column=0, sticky="nsew")
         canvas.grid_columnconfigure(0, weight=1)
-        canvas.grid_rowconfigure(4, weight=1)
+        canvas.grid_rowconfigure(5, weight=1)
         toolbar = ctk.CTkFrame(canvas, fg_color="transparent")
         toolbar.grid(row=0, column=0, sticky="ew", padx=20, pady=(16, 8))
-        ctk.CTkLabel(toolbar, text="Document preview", font=F(17, "bold"),
+        title_row = ctk.CTkFrame(toolbar, fg_color="transparent")
+        title_row.pack(fill="x")
+        action_row = ctk.CTkFrame(toolbar, fg_color="transparent")
+        action_row.pack(fill="x", pady=(10, 0))
+        ctk.CTkLabel(title_row, text="Your pages", font=F(17, "bold"),
                      text_color=TEXT).pack(side="left")
-        self.compare_button = ctk.CTkButton(toolbar, text="Compare originals",
+        self.compare_button = ctk.CTkButton(title_row, text="Compare originals",
                                              width=128, height=30, fg_color=BTN,
                                              hover_color=CARD, text_color=TEXT,
                                              font=F(11), command=self.toggle_compare)
         self.compare_button.pack(side="right", padx=(6, 0))
+        self.fit_page_button = ctk.CTkButton(
+            action_row, text="Fit whole page", width=108, height=30,
+            fg_color=BTN, hover_color=CARD, text_color=TEXT,
+            font=F(11), command=self.toggle_fit_page)
+        self.fit_page_button.pack(side="right", padx=(6, 0))
         for char, delta in (("+", 0.2), ("−", -0.2)):
-            ctk.CTkButton(toolbar, text=char, width=30, height=30,
+            ctk.CTkButton(action_row, text=char, width=30, height=30,
                           fg_color=BTN, hover_color=CARD, text_color=TEXT,
                           font=F(14, "bold"),
                           command=lambda d=delta: self.change_zoom(d)).pack(side="right", padx=3)
-        ctk.CTkLabel(toolbar, textvariable=self.zoom_var, font=F(11),
+        ctk.CTkLabel(action_row, textvariable=self.zoom_var, font=F(11),
                      text_color=MUTED, width=40).pack(side="right", padx=(8, 6))
-        ctk.CTkButton(toolbar, text="Delete page", width=83, height=30,
+        ctk.CTkButton(action_row, text="Delete page", width=83, height=30,
                       fg_color=BTN, hover_color=CARD, text_color=TEXT,
                       font=F(11), command=self.delete_selected_page).pack(side="right", padx=4)
-        ctk.CTkButton(toolbar, text="Rotate", width=62, height=30,
+        ctk.CTkButton(action_row, text="Rotate", width=62, height=30,
                       fg_color=BTN, hover_color=CARD, text_color=TEXT,
                       font=F(11), command=self.rotate_selected_page).pack(side="right", padx=4)
         self.preview_label = ctk.CTkLabel(canvas, text="Add PDFs to see a preview.",
                                           font=F(12), text_color=MUTED, anchor="w")
         self.preview_label.grid(row=1, column=0, padx=22, pady=(0, 5), sticky="ew")
+        self.current_pdf_label = ctk.CTkLabel(
+            canvas, textvariable=self.preview_name_var, text_color=TEXT,
+            font=F(13, "bold"), anchor="w", justify="left", wraplength=680)
+        self.current_pdf_label.grid(row=1, column=0, padx=22, pady=(18, 6), sticky="ew")
+        self.preview_label.grid(row=2, column=0, padx=22, pady=(0, 5), sticky="ew")
         self.output_tabs = ctk.CTkScrollableFrame(canvas, orientation="horizontal",
                                                    height=42, fg_color="transparent")
-        self.output_tabs.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 5))
+        self.output_tabs.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 5))
         self.before_strip = ctk.CTkFrame(canvas, fg_color=CARD,
                                           corner_radius=8, height=106)
-        self.before_strip.grid(row=3, column=0, sticky="ew", padx=17, pady=(0, 9))
+        self.before_strip.grid(row=4, column=0, sticky="ew", padx=17, pady=(0, 9))
         self.before_strip.grid_remove()
         self.compare_visible = False
         self.page_list = ctk.CTkScrollableFrame(canvas, fg_color=CANVAS_BG,
                                                  corner_radius=9)
-        self.page_list.grid(row=4, column=0, sticky="nsew", padx=17, pady=(0, 6))
+        self.page_list.grid(row=5, column=0, sticky="nsew", padx=17, pady=(0, 6))
         canvas.bind("<Configure>", self._on_preview_resize)
         page_nav = ctk.CTkFrame(canvas, fg_color="transparent")
-        page_nav.grid(row=5, column=0, sticky="ew", padx=20, pady=(5, 15))
+        page_nav.grid(row=6, column=0, sticky="ew", padx=20, pady=(5, 15))
         self.prev_btn = ctk.CTkButton(page_nav, text="Previous", width=98, height=31,
                                       fg_color=BTN, hover_color=CARD, text_color=TEXT,
                                       font=F(12),
@@ -608,8 +637,12 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
                      text_color=TEXT).pack(side="left")
         ctk.CTkLabel(top, text="MANUAL MODE", text_color=ACCENT,
                      font=F(10, "bold")).pack(side="right")
-        ctk.CTkLabel(self.inspector, text="INPUT FILES", text_color=MUTED,
-                     font=F(10, "bold")).pack(anchor="w", pady=(0, 8))
+        ctk.CTkLabel(self.inspector, text="1  YOUR PDF FILES", text_color=ACCENT,
+                     font=F(12, "bold")).pack(anchor="w", pady=(0, 4))
+        ctk.CTkLabel(self.inspector,
+                     text="Click a file below to show all its pages on the right.",
+                     text_color=MUTED, font=F(11), wraplength=350,
+                     justify="left").pack(anchor="w", pady=(0, 10))
         self.input_status = ctk.CTkLabel(
             self.inspector, textvariable=self.files_summary_var,
             text_color=MUTED, font=F(11), anchor="w",
@@ -620,8 +653,8 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         ctk.CTkButton(self.inspector, text="+ Add files", command=self.browse_files,
                       fg_color=BTN, text_color=TEXT, font=F(12),
                       height=30).pack(fill="x", pady=(9, 10))
-        ctk.CTkLabel(self.inspector, text="START WITH", text_color=MUTED,
-                     font=F(10, "bold")).pack(anchor="w", pady=(0, 5))
+        ctk.CTkLabel(self.inspector, text="How should the files start?", text_color=TEXT,
+                     font=F(12, "bold")).pack(anchor="w", pady=(0, 5))
         self.start_mode_var = tk.StringVar(value="PDF 1 only")
         self.start_mode_menu = ctk.CTkOptionMenu(
             self.inspector, values=list(START_MODES), variable=self.start_mode_var,
@@ -632,13 +665,20 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
                      text="Choose separate PDFs to edit each file before merging.",
                      text_color=MUTED, font=F(11), wraplength=340,
                      justify="left").pack(anchor="w", pady=(0, 17))
-        ctk.CTkLabel(self.inspector, text="WORKFLOW STEPS  ·  TOP TO BOTTOM", text_color=MUTED,
-                     font=F(10, "bold")).pack(anchor="w")
+        ctk.CTkLabel(self.inspector, text="2  EDIT THE PAGES", text_color=ACCENT,
+                     font=F(12, "bold")).pack(anchor="w")
         ctk.CTkLabel(self.inspector,
-                     text="For PDF 2 edits, choose PDF 2 in the step settings. "
-                          "Merge edited PDFs only AFTER those edits.",
+                     text="Select the PDF you want to change, then choose an action.",
                      text_color=MUTED, font=F(11), wraplength=345,
-                     justify="left").pack(anchor="w", pady=(6, 9))
+                     justify="left").pack(anchor="w", pady=(4, 9))
+        ctk.CTkLabel(self.inspector, text="EDIT THIS PDF", text_color=MUTED,
+                     font=F(10, "bold")).pack(anchor="w", pady=(0, 5))
+        self.edit_target_menu = ctk.CTkOptionMenu(
+            self.inspector, values=["Import a PDF to start"],
+            variable=self.edit_target_var, command=self._choose_edit_target,
+            fg_color=BTN, button_color=BORDER, text_color=TEXT,
+            font=F(12), height=36)
+        self.edit_target_menu.pack(fill="x", pady=(0, 12))
         self.workflow_label = ctk.CTkLabel(self.inspector, text=self.workflow_name,
                                            font=F(15, "bold"), text_color=TEXT,
                                            wraplength=265, justify="left")
@@ -652,10 +692,12 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
                                         text_color=TEXT, font=F(12), width=172)
         self.add_op.pack(side="left", fill="x", expand=True)
         self.add_op.set("Delete pages")
-        ctk.CTkButton(addrow, text="+ Step", width=74, height=33,
+        ctk.CTkButton(addrow, text="Add edit", width=84, height=33,
                       font=F(12), fg_color=ACCENT, command=self.add_step).pack(
                           side="right", padx=(8, 0))
-        ctk.CTkButton(self.inspector, text="+ Merge edited PDFs",
+        ctk.CTkLabel(self.inspector, text="3  COMBINE (OPTIONAL)", text_color=ACCENT,
+                     font=F(12, "bold")).pack(anchor="w", pady=(10, 5))
+        ctk.CTkButton(self.inspector, text="Combine edited PDFs",
                       fg_color=ACCENT, text_color="#ffffff", font=F(12, "bold"), height=36,
                       command=lambda: self.add_step("merge_documents")).pack(fill="x", pady=(4, 8))
         ctk.CTkButton(self.inspector, text="+ Insert PDF at position 1",
@@ -674,8 +716,8 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
                       command=self.save_recipe).pack(fill="x", pady=(0, 13))
         ctk.CTkFrame(self.inspector, height=1, fg_color=BORDER).pack(fill="x",
                           pady=(0, 18))
-        ctk.CTkLabel(self.inspector, text="OUTPUT", text_color=MUTED,
-                     font=F(10, "bold")).pack(anchor="w", pady=(0, 6))
+        ctk.CTkLabel(self.inspector, text="4  SAVE YOUR PDF", text_color=ACCENT,
+                     font=F(12, "bold")).pack(anchor="w", pady=(0, 6))
         self.outputs_label = ctk.CTkLabel(self.inspector, text="No preview yet",
                                           text_color=TEXT, font=F(12),
                                           justify="left", anchor="w", wraplength=265)
@@ -713,20 +755,47 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
                                          fg_color=BTN, text_color=TEXT, font=F(11))
         self.stop_button.pack(side="right")
 
-    def toggle_inspector(self):
-        self.inspector_visible = not self.inspector_visible
+    def _arrange_workspace(self):
+        """Two-column editing screen by default; optional templates drawer."""
+        if self.sidebar_visible:
+            self.sidebar.grid()
+            self.grid_columnconfigure(0, weight=0, minsize=218)
+            builder_col, preview_col = 1, 2
+            self.templates_button.configure(text="Hide templates")
+        else:
+            self.sidebar.grid_remove()
+            self.grid_columnconfigure(0, weight=0, minsize=0)
+            builder_col, preview_col = 0, 1
+            self.templates_button.configure(text="Templates & saved")
+
+        for column in (1, 2):
+            self.grid_columnconfigure(column, weight=0, minsize=0)
+
         if self.inspector_visible:
-            self.grid_columnconfigure(1, weight=0, minsize=400)
-            self.inspector.grid()
-            self.mainpane.grid_configure(column=2, columnspan=1, padx=(2, 20))
-            self.drawer_button.configure(text="Hide builder")
+            self.grid_columnconfigure(builder_col, weight=0, minsize=390)
+            self.inspector.grid(row=1, column=builder_col, sticky="nsew",
+                                padx=(12 if builder_col == 0 else 4, 10), pady=(0, 9))
+            self.grid_columnconfigure(preview_col, weight=1, minsize=500)
+            self.mainpane.grid(row=1, column=preview_col, columnspan=1,
+                               sticky="nsew", padx=(2, 18), pady=(0, 9))
+            self.drawer_button.configure(text="Hide editor")
         else:
             self.inspector.grid_remove()
-            self.grid_columnconfigure(1, weight=0, minsize=0)
-            self.mainpane.grid_configure(column=1, columnspan=2, padx=(5, 20))
-            self.drawer_button.configure(text="Show builder")
+            self.grid_columnconfigure(builder_col, weight=1, minsize=0)
+            self.mainpane.grid(row=1, column=builder_col,
+                               columnspan=(3 - builder_col), sticky="nsew",
+                               padx=(14, 18), pady=(0, 9))
+            self.drawer_button.configure(text="Show editor")
         if self.compiled:
             self.after(80, self._render_pages)
+
+    def toggle_inspector(self):
+        self.inspector_visible = not self.inspector_visible
+        self._arrange_workspace()
+
+    def toggle_sidebar(self):
+        self.sidebar_visible = not self.sidebar_visible
+        self._arrange_workspace()
 
     def toggle_ai_composer(self):
         self.ai_composer_visible = not self.ai_composer_visible
@@ -1134,20 +1203,96 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
     def _populate_sources(self):
         self._clear_children(self.sources_frame)
         if not self.sources:
-            ctk.CTkLabel(self.sources_frame, text="No files selected.",
-                         text_color=MUTED, font=F(12)).pack(anchor="w", pady=5)
-        for alias, path in self.sources.items():
-            line = ctk.CTkFrame(self.sources_frame, fg_color=CARD, corner_radius=8)
-            line.pack(fill="x", pady=3)
-            ctk.CTkLabel(line, text=alias.replace("input", ""), text_color=ACCENT,
-                         width=24, font=F(12, "bold")).pack(side="left", padx=(9, 5))
-            ctk.CTkLabel(line, text=path.name[:24], text_color=TEXT,
-                         font=F(12), anchor="w").pack(side="left", fill="x", expand=True,
-                                                      pady=9)
-            ctk.CTkButton(line, text="×", width=25, height=25, fg_color="transparent",
-                          hover_color=BORDER, text_color=MUTED, font=F(14),
-                          command=lambda a=alias: self.remove_file(a)).pack(
-                              side="right", padx=6)
+            ctk.CTkLabel(self.sources_frame, text="No PDFs yet. Click + Add PDFs.",
+                         text_color=MUTED, font=F(12)).pack(anchor="w", pady=9)
+            return
+        for number, (alias, path) in enumerate(self.sources.items(), 1):
+            active = self.active_source_alias == alias
+            line = ctk.CTkFrame(
+                self.sources_frame, fg_color=CARD if active else SURFACE,
+                corner_radius=9, border_width=2 if active else 1,
+                border_color=ACCENT if active else BORDER)
+            line.pack(fill="x", pady=4)
+            ctk.CTkLabel(line, text=f"PDF {number}", text_color=ACCENT,
+                         width=56, font=F(12, "bold")).pack(
+                             side="left", padx=(9, 4), pady=10)
+            filename = path.name if len(path.name) <= 31 else path.name[:28] + "…"
+            ctk.CTkLabel(line, text=filename, text_color=TEXT,
+                         font=F(12), anchor="w").pack(
+                             side="left", fill="x", expand=True)
+            ctk.CTkButton(
+                line, text="View", width=48, height=29,
+                fg_color=ACCENT if active else BTN,
+                text_color="#ffffff" if active else TEXT,
+                font=F(11, "bold"), command=lambda a=alias: self.view_source_pdf(a)
+            ).pack(side="right", padx=(3, 3))
+            ctk.CTkButton(
+                line, text="×", width=24, height=25,
+                fg_color="transparent", hover_color=BORDER,
+                text_color=MUTED, font=F(14),
+                command=lambda a=alias: self.remove_file(a)
+            ).pack(side="right", padx=(2, 6))
+
+    def _refresh_edit_targets(self):
+        if not self.compiled:
+            self.edit_target_map = {}
+            self.edit_target_menu.configure(values=["Import PDFs first"])
+            self.edit_target_var.set("Import PDFs first")
+            return
+        options = {
+            f"{i + 1}. " + output_tab_title(i, doc, self.sources, len(self.compiled.documents)): i
+            for i, doc in enumerate(self.compiled.documents)
+        }
+        self.edit_target_map = options
+        self.edit_target_menu.configure(values=list(options))
+        names = list(options)
+        self.edit_target_var.set(names[min(self.active_document, len(names)-1)])
+
+    def _choose_edit_target(self, label):
+        if label in self.edit_target_map:
+            self.select_document(self.edit_target_map[label])
+
+    def view_source_pdf(self, alias: str):
+        if alias not in self.sources or self.compiled is None:
+            return
+        self.active_source_alias = alias
+        # When PDFs are still separate, show the edited pages for this PDF.
+        indices = [
+            index for index, doc in enumerate(self.compiled.documents)
+            if doc.pages and {page.source for page in doc.pages} == {alias}
+        ]
+        if len(indices) == 1:
+            self.source_view_alias = None
+            self.select_document(indices[0])
+            self.status_var.set(
+                f"Viewing PDF {list(self.sources).index(alias) + 1}: "
+                f"{self.sources[alias].name}. Select a page to edit it.")
+        else:
+            # After merging, the source remains accessible as a read-only
+            # original preview, with an explicit return to the edited result.
+            self.source_view_alias = alias
+            self.source_view_compilation = compile_workflow(
+                [{"op": "load", "source": alias}], self.sources)
+            self.page_offset = 0
+            self.selected_page = None
+            self._render_tabs()
+            self._render_pages()
+            self.status_var.set(
+                f"Viewing ORIGINAL PDF {list(self.sources).index(alias) + 1}. "
+                "Return to edited result before applying more steps.")
+        self._populate_sources()
+
+    def show_edited_result(self):
+        self.source_view_alias = None
+        self.source_view_compilation = None
+        if self.compiled:
+            aliases = {p.source for p in self.compiled.documents[self.active_document].pages}
+            self.active_source_alias = next(iter(aliases)) if len(aliases) == 1 else None
+        self.page_offset = 0
+        self.selected_page = None
+        self._render_tabs()
+        self._render_pages()
+        self._populate_sources()
 
     def _populate_steps(self):
         self._clear_children(self.step_frame)
@@ -1157,12 +1302,19 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         if current_mode:
             self.start_mode_var.set(current_mode)
         self._populate_presets()
+        if len(self.steps) == 1:
+            ctk.CTkLabel(self.step_frame,
+                         text="No edits yet. Choose a PDF above, then add an edit.",
+                         text_color=MUTED, font=F(11), wraplength=335,
+                         justify="left").pack(anchor="w", padx=5, pady=8)
         for i, step in enumerate(self.steps):
+            if i == 0:  # Already explained in the Start with selector.
+                continue
             item = ctk.CTkFrame(self.step_frame, fg_color=CARD, corner_radius=9)
             item.pack(fill="x", pady=4)
             top = ctk.CTkFrame(item, fg_color="transparent")
             top.pack(fill="x", padx=10, pady=(10, 3))
-            ctk.CTkLabel(top, text=f"{i+1:02d}", text_color=ACCENT,
+            ctk.CTkLabel(top, text=f"{i:02d}", text_color=ACCENT,
                          width=24, font=F(12, "bold")).pack(side="left", padx=(0, 6))
             step_title = {
                 "load": "Start · PDF 1",
@@ -1307,6 +1459,8 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         self._update_import_banner()
         self.preview()
         if imported:
+            newest_alias = list(self.sources)[-1]
+            self.view_source_pdf(newest_alias)
             self.status_var.set(
                 f"Imported {len(imported)} PDF(s): " + ", ".join(imported[:2]) +
                 (f" (+{len(imported)-2} more)" if len(imported) > 2 else ""))
@@ -1321,6 +1475,9 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
                 parent=self)
 
     def remove_file(self, alias):
+        self.source_view_alias = None
+        self.source_view_compilation = None
+        self.active_source_alias = None
         self.sources = {f"input{i}": path for i, path in enumerate(
             (p for k, p in self.sources.items() if k != alias), 1)}
         if self.sources:
@@ -1339,6 +1496,9 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
     def clear_files(self):
         if not self.sources:
             return
+        self.source_view_alias = None
+        self.source_view_compilation = None
+        self.active_source_alias = None
         self.sources.clear()
         self.compiled = None
         self.steps = [{"op": "load", "source": "input1"}]
@@ -1362,6 +1522,8 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         self.undo_stack = self.undo_stack[-50:]
         self.redo_stack.clear()
         self.steps = validated
+        self.source_view_alias = None
+        self.source_view_compilation = None
         self._populate_steps()
         self._update_import_banner()
         self.preview()
@@ -1398,6 +1560,9 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
             ):
                 return
         self.sources.clear()
+        self.source_view_alias = None
+        self.source_view_compilation = None
+        self.active_source_alias = None
         self.steps = [{"op": "load", "source": "input1"}]
         self.workflow_name = "Untitled workflow"
         self.selected_recipe_name = None
@@ -1409,6 +1574,7 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         self.active_document = 0
         self.page_offset = 0
         self.zoom_scale = 1.0
+        self.fit_full_page = False
         self.zoom_var.set("100%")
         self.prompt.delete("1.0", "end")
         self._populate_sources()
@@ -1420,6 +1586,9 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
 
     def add_step(self, operation: str | None = None, *, open_editor: bool = True):
         """Append a manually configured operation to the currently visible plan."""
+        if self.source_view_alias:
+            self._error("You are viewing an original PDF. Select Back to edited result before adding edits.")
+            return
         op = operation or STEP_OPTIONS[self.add_op.get()]
         if not self.sources:
             self._error("Import your PDFs first, then choose an operation.")
@@ -1543,6 +1712,10 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         if not self.sources:
             self.compiled = None
             self.preview_label.configure(text="Add PDF files to preview your changes.")
+            self.preview_name_var.set("No PDF selected")
+            self.active_source_alias = None
+            self.source_view_alias = None
+            self._refresh_edit_targets()
             self.outputs_label.configure(text="No output yet.")
             self._clear_children(self.output_tabs)
             self._clear_children(self.page_list)
@@ -1552,13 +1725,24 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
             compiled = compile_workflow(self.steps, self.sources)
             names = output_names(compiled, self.filename_pattern.get())
             self.compiled = compiled
+            if not self.source_view_alias:
+                aliases = {p.source for p in compiled.documents[min(
+                    self.active_document, len(compiled.documents) - 1)].pages}
+                self.active_source_alias = next(iter(aliases)) if len(aliases) == 1 else None
             self.active_document = min(self.active_document, len(compiled.documents) - 1)
             self.page_offset = min(self.page_offset, max(0, len(compiled.documents[self.active_document].pages) - 1))
             self.outputs_label.configure(text="\n".join(
                 f"{name} · {len(doc.pages)}p" for name, doc in zip(names[:5], compiled.documents[:5])) +
                 (f"\n… and {len(names)-5} more" if len(names) > 5 else ""))
-            self.preview_label.configure(text=f"{len(self.sources)} input(s)  →  {len(compiled.documents)} output(s)  ·  {compiled.page_count} page(s)")
+            count = len(compiled.documents)
+            if count == 1:
+                summary = f"{compiled.page_count} pages · Edits are previews until you save"
+            else:
+                summary = f"{count} PDFs · Click a PDF name above or in Your PDF files to switch"
+            self.preview_label.configure(text=summary)
             self._render_tabs()
+            self._refresh_edit_targets()
+            self._populate_sources()
             if self.compare_visible:
                 self._render_before()
             self._render_pages()
@@ -1608,25 +1792,54 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         self._clear_children(self.output_tabs)
         if not self.compiled:
             return
+        if self.source_view_alias is not None:
+            ctk.CTkButton(
+                self.output_tabs, text="← Back to edited result", width=183,
+                height=33, fg_color=ACCENT, text_color="#ffffff",
+                font=F(12, "bold"), command=self.show_edited_result
+            ).pack(side="left", padx=4)
+            return
+        total = len(self.compiled.documents)
         for i, doc in enumerate(self.compiled.documents[:120]):
-            ctk.CTkButton(self.output_tabs, text=f"Output {i+1} ({len(doc.pages)}p)",
-                          height=31, width=122, fg_color=ACCENT if i == self.active_document else BTN,
-                          text_color="#ffffff" if i == self.active_document else TEXT,
-                          font=F(12),
-                          command=lambda j=i: self.select_document(j)).pack(side="left", padx=3)
-        if len(self.compiled.documents) > 120:
-            ctk.CTkLabel(self.output_tabs, text="First 120 outputs shown").pack(side="left")
+            title = output_tab_title(i, doc, self.sources, total)
+            ctk.CTkButton(
+                self.output_tabs, text=title,
+                height=34, width=max(180, min(340, 75 + len(title) * 6)),
+                fg_color=ACCENT if i == self.active_document else BTN,
+                text_color="#ffffff" if i == self.active_document else TEXT,
+                font=F(12, "bold" if i == self.active_document else "normal"),
+                command=lambda j=i: self.select_document(j)
+            ).pack(side="left", padx=4)
+        if total > 120:
+            ctk.CTkLabel(self.output_tabs, text="First 120 PDFs shown").pack(side="left")
 
     def select_document(self, index):
+        if not self.compiled or index >= len(self.compiled.documents):
+            return
+        self.source_view_alias = None
+        self.source_view_compilation = None
         self.active_document = index
         self.page_offset = 0
         self.selected_page = None
+        aliases = {page.source for page in self.compiled.documents[index].pages}
+        self.active_source_alias = next(iter(aliases)) if len(aliases) == 1 else None
         self._render_tabs()
+        self._refresh_edit_targets()
         self._render_pages()
+        self._populate_sources()
 
     def change_zoom(self, delta):
+        self.fit_full_page = False
+        self.fit_page_button.configure(text="Fit whole page")
         self.zoom_scale = max(0.6, min(2.6, round(self.zoom_scale + delta, 2)))
         self.zoom_var.set(f"{round(self.zoom_scale * 100)}%")
+        self._render_pages()
+
+    def toggle_fit_page(self):
+        self.fit_full_page = not self.fit_full_page
+        self.fit_page_button.configure(
+            text="Grid view" if self.fit_full_page else "Fit whole page")
+        self.zoom_var.set("Fit" if self.fit_full_page else f"{round(self.zoom_scale * 100)}%")
         self._render_pages()
 
     def _on_preview_resize(self, event):
@@ -1641,59 +1854,103 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
         self._page_resize_job = self.after(120, self._render_pages)
 
     def _render_pages(self):
+        """Draw every page in full, with aspect ratio preserved.
+
+        Fewer columns are shown when the viewport is narrow or the user zooms
+        in. A tall or landscape page is never clipped to an arbitrary height.
+        """
         self._page_resize_job = None
         self._clear_children(self.page_list)
         self.image_refs.clear()
         if not self.compiled:
+            self.preview_name_var.set("No PDF selected")
             return
-        pages = self.compiled.documents[self.active_document].pages
-        end = min(len(pages), self.page_offset + 12)
-        self.page_count_label.configure(text=f"{self.page_offset + 1}–{end} of {len(pages)}")
+        display = self.source_view_compilation or self.compiled
+        if not display.documents:
+            return
+        doc_index = 0 if self.source_view_compilation else self.active_document
+        doc = display.documents[doc_index]
+        pages = doc.pages
+        total = len(pages)
+        if self.source_view_alias:
+            alias = self.source_view_alias
+            self.preview_name_var.set(
+                f"ORIGINAL PDF {list(self.sources).index(alias) + 1}: "
+                f"{self.sources[alias].name} · read-only")
+        else:
+            self.preview_name_var.set(
+                output_tab_title(self.active_document, doc, self.sources,
+                                 len(display.documents)))
+        end = min(total, self.page_offset + 12)
+        self.page_count_label.configure(
+            text=f"Pages {self.page_offset + 1}–{end} of {total}")
         self.prev_btn.configure(state="normal" if self.page_offset else "disabled")
-        self.next_btn.configure(state="normal" if end < len(pages) else "disabled")
+        self.next_btn.configure(state="normal" if end < total else "disabled")
         if not pages:
             return
-        usable = self.page_list.winfo_width()
-        if usable < 200:
-            usable = max(430, self.mainpane.winfo_width() - 82)
-        cols, thumb_w, thumb_h = thumbnail_layout(max(360, usable - 24), self.zoom_scale)
-        # Reset old layout columns when zooming in (six -> five -> four ...).
-        for col in range(9):
-            self.page_list.grid_columnconfigure(col, weight=1 if col < cols else 0, minsize=0)
-        for i in range(self.page_offset, end):
-            ref = pages[i]
+        # Tk's winfo dimensions are device pixels, whereas CTk widget/image
+        # sizes are logical pixels. Without conversion, Windows 200% DPI makes
+        # six oversized cards spill beyond the viewer and appear cropped.
+        scale = max(0.5, ctk.ScalingTracker.get_widget_scaling(self))
+        # CTkScrollableFrame.winfo_height() describes its expanding CONTENT;
+        # the underlying Tk canvas reports the actual clipped viewport.
+        viewport = self.page_list._parent_canvas
+        available = viewport.winfo_width() / scale
+        if available < 200:
+            available = max(250, self.mainpane.winfo_width() / scale - 65)
+        available = max(220, int(available - 20))
+        if self.fit_full_page:
+            columns = 1
+            thumb_width = max(150, available - 56)
+            available_height = viewport.winfo_height() / scale
+            # The entire page fits the visible window in this mode.
+            full_page_height = max(170, int(available_height - 65))
+        else:
+            columns, thumb_width, _ = thumbnail_layout(available, self.zoom_scale)
+            full_page_height = None
+        for column in range(6):
+            self.page_list.grid_columnconfigure(
+                column, weight=1 if column < columns else 0, minsize=0)
+        for index in range(self.page_offset, end):
+            page = pages[index]
             card = ctk.CTkFrame(
                 self.page_list, fg_color=SURFACE, corner_radius=9,
-                border_width=2 if self.selected_page == i else 1,
-                border_color=ACCENT if self.selected_page == i else BORDER)
-            card.grid(row=(i - self.page_offset) // cols,
-                      column=(i - self.page_offset) % cols, sticky="n",
-                      padx=4, pady=8)
-            card.page_index = i
+                border_width=2 if self.selected_page == index else 1,
+                border_color=ACCENT if self.selected_page == index else BORDER)
+            card.grid(row=(index - self.page_offset) // columns,
+                      column=(index - self.page_offset) % columns,
+                      sticky="n", padx=5, pady=9)
+            card.page_index = index
             try:
-                img = image_for(ref, self.compiled.sources, max(thumb_w, 72))
-                ratio = min(thumb_w / max(1, img.width),
-                            thumb_h / max(1, img.height))
-                size = (max(1, int(img.width * ratio)),
-                        max(1, int(img.height * ratio)))
-                visual = ctk.CTkImage(light_image=img, dark_image=img, size=size)
+                image = image_for(page, display.sources, max(thumb_width, 72))
+                image_size = fit_image_size(
+                    image.width, image.height, thumb_width, full_page_height)
+                visual = ctk.CTkImage(
+                    light_image=image, dark_image=image, size=image_size)
                 self.image_refs.append(visual)
                 thumb = ctk.CTkLabel(card, text="", image=visual,
-                                     height=thumb_h, width=thumb_w)
-            except Exception:
-                thumb = ctk.CTkLabel(card, text="Preview unavailable",
-                                     height=thumb_h, width=thumb_w,
-                                     text_color=MUTED, font=F(10))
-            thumb.pack(padx=5, pady=(7, 2))
-            thumb.page_index = i
+                                     width=image_size[0], height=image_size[1])
+            except (OSError, WorkflowError, ValueError) as error:
+                thumb = ctk.CTkLabel(
+                    card, text=f"Page preview unavailable:\n{str(error)[:80]}",
+                    width=thumb_width, height=90, wraplength=thumb_width,
+                    text_color=MUTED, font=F(10))
+            thumb.pack(padx=6, pady=(7, 2))
+            thumb.page_index = index
+            origin = self.sources.get(page.source)
+            filename = origin.name if origin is not None else page.source
+            if len(filename) > 32:
+                filename = filename[:29] + "…"
             label = ctk.CTkLabel(
-                card, text=f"Page {i+1}  ·  {ref.source} #{ref.index+1}",
-                text_color=MUTED, font=F(10), width=thumb_w,
-                wraplength=thumb_w, height=25)
-            label.pack(padx=3, pady=(0, 6))
-            label.page_index = i
+                card, text=f"Page {index + 1}  ·  {filename}, page {page.index + 1}",
+                text_color=MUTED, font=F(10), width=thumb_width,
+                wraplength=thumb_width, height=30)
+            label.pack(padx=5, pady=(0, 6))
+            label.page_index = index
             for widget in (card, thumb, label):
-                widget.bind("<ButtonPress-1>", lambda _event, p=i: self._start_drag(p))
+                widget.bind(
+                    "<ButtonPress-1>", lambda _event, number=index:
+                    self._start_drag(number))
                 widget.bind("<ButtonRelease-1>", self._end_drag)
 
     def _start_drag(self, number):
@@ -1703,6 +1960,10 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
 
     def _end_drag(self, event):
         origin = self.drag_page
+        if self.source_view_alias:
+            self.drag_page = None
+            self.status_var.set("Original PDF preview is read-only. Return to edited result to change pages.")
+            return
         self.drag_page = None
         if origin is None or not self.compiled:
             return
@@ -1724,11 +1985,16 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
 
     def change_page_offset(self, count):
         if self.compiled:
-            max_start = max(0, len(self.compiled.documents[self.active_document].pages) - 1)
+            display = self.source_view_compilation or self.compiled
+            doc_index = 0 if self.source_view_compilation else self.active_document
+            max_start = max(0, len(display.documents[doc_index].pages) - 1)
             self.page_offset = max(0, min(max_start, self.page_offset + count))
             self._render_pages()
 
     def rotate_selected_page(self):
+        if self.source_view_alias:
+            self.status_var.set("Original preview is read-only. Select Back to edited result first.")
+            return
         if self.selected_page is not None and self.compiled:
             self.set_steps(self.steps + [{"op": "rotate", "pages": str(self.selected_page+1),
                                            "degrees": 90, "document": self.active_document}])
@@ -1736,6 +2002,9 @@ class StudioApp(TkinterDnD.DnDWrapper, ctk.CTk):
             self.status_var.set("Select a page thumbnail first.")
 
     def delete_selected_page(self):
+        if self.source_view_alias:
+            self.status_var.set("Original preview is read-only. Select Back to edited result first.")
+            return
         if self.selected_page is None or not self.compiled:
             self.status_var.set("Click a page thumbnail to select it, then choose Delete page.")
             return

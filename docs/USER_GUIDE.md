@@ -25,15 +25,15 @@ For a deletion *from the second PDF*, keep **Edit PDFs separately**. Choosing **
 
 ## 3. Build your workflow manually
 
-The **Build your workflow** editor is visible automatically in the middle column. There is no separate editing drawer to open.
+The **Build your workflow** editor opens automatically in the left column, next to a large page preview. The optional template library is collapsed by default; open **Templates & saved** in the top bar if needed.
 
-1. Import the PDF files and choose **Start with**.
-2. In **Workflow steps**, choose **Delete pages**, **Rotate pages**, **Extract pages**, **Split every N pages**, or another operation from the dropdown.
-3. Click **+ Step**. The **Configure workflow step** dialog opens.
+1. Import the files. They appear under **1 YOUR PDF FILES** as individual cards, each with a **View** button. The most recently imported PDF is displayed on the right.
+2. Click **View** next to the PDF you want to change (for example, PDF 2). Under **2 EDIT THE PAGES**, confirm the **EDIT THIS PDF** selection, then choose **Delete pages**, **Rotate pages**, **Extract pages**, or another action.
+3. Click **Add edit**. The **Configure workflow step** dialog opens with the selected PDF as its target.
 4. Under **Apply changes to**, choose **PDF 1**, **PDF 2**, or **All current PDFs**, as appropriate.
 5. Set the page selection (e.g., `1`, `2-5`, `even` or `all`) and click **Apply step**.
 6. Add more steps as needed; use the ↑/↓ arrows to reorder them.
-7. **When you are done editing the separate PDFs**, click **+ Merge edited PDFs**. This creates one output, with PDF 1 first by default.
+7. **When you are done editing the separate PDFs**, click **Combine edited PDFs**. This creates one output, with PDF 1 first by default.
 8. Check the live preview on the right, then click **Save as PDF**.
 
 You can select **Save reusable workflow** to store a recipe or **+ New workflow** to start from a clean workspace. Presets on the left are templates that replace the current steps after confirmation.
@@ -44,9 +44,9 @@ Suppose PDF 1 contains A1, A2 and A3, while PDF 2 contains B1, B2 and B3. You wa
 
 1. Add PDF 1 and PDF 2 in that order.
 2. Keep **Start with → Edit PDFs separately**.
-3. Choose **Delete pages** from the operation dropdown and click **+ Step**.
+3. Click **View** next to PDF 2, choose **Delete pages**, and click **Add edit**.
 4. Choose **Apply changes to → PDF 2**; enter **1** as the page number; click **Apply step**.
-5. Click **+ Merge edited PDFs**. The default merge order is PDF 1, then the modified PDF 2.
+5. Click **Combine edited PDFs**. The default merge order is PDF 1, then the modified PDF 2.
 6. Verify the preview. Click **Save as PDF** to choose the new filename.
 
 This creates the following ordered steps:
@@ -71,11 +71,11 @@ Import front and back scans, then choose **Start with → Duplex scan pair**. In
 
 ## 4. Review the output
 
-The preview on the right shows the current PDF pages. At 100% zoom, six thumbnail columns fit across the available area; zooming in enlarges pages and reduces columns.
+The preview on the right shows the **complete** page images, including tall pages and landscape pages. It automatically adapts the number of thumbnails per row to the actual window width and Windows display scaling. Zooming in makes pages larger and reduces the number of columns (for example, three across becomes two). **Fit whole page** displays complete pages within the viewer's visible height, without cutting off the bottom or sides. Scroll to see additional pages.
 
 Click a thumbnail to delete or rotate that page. For other edits, use the **Workflow steps** list. Some changes, such as removing blank pages, should always be reviewed carefully.
 
-If your workflow creates multiple output PDFs, switch between their tabs in the preview. After **Merge edited PDFs**, the preview shows one combined output instead.
+If a workflow has multiple PDFs, the preview tabs use labels such as **PDF 1 · invoice.pdf** and **PDF 2 · attachment.pdf**, not abstract labels such as Output 2. You can also click **View** on each file card. After combining, the preview is labeled **Combined PDF**; the source cards can still show read-only originals, with a **Back to edited result** button.
 
 ## 5. Save the result
 

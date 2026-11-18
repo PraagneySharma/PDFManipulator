@@ -24,7 +24,7 @@ Or double-click `Start PDFManipulator.bat` to automate the first two commands. T
 .\.venv\Scripts\python.exe -m tests.smoke_ui
 ~~~
 
-The GUI smoke test exercises the manual-first layout, PDF-specific deletion, post-edit merging, responsive zoom, Save As, and the optional AI panel. The last test needs a graphical Windows desktop. PDF test documents are generated during tests and never committed. The ChatGPT auth and inference tests simulate authorization; live account sign-in requires a human to approve the browser flow.
+The GUI smoke test exercises a two-column manual-first layout, filename-based source selection, full-page previews at Windows 200% DPI, PDF-specific deletion, post-edit merging, responsive zoom, Save As, and the optional AI panel. The last test needs a graphical Windows desktop. PDF test documents are generated during tests and never committed. The ChatGPT auth and inference tests simulate authorization; live account sign-in requires a human to approve the browser flow.
 
 ## Build a portable Windows EXE
 
@@ -54,7 +54,7 @@ This should launch, load synthetic PDFs, render thumbnails, export a verified PD
 | `pdfmanipulator/ai.py` | Optional Ollama and separately billed API providers |
 | `pdfmanipulator/chatgpt.py` | ChatGPT-plan OAuth connection, protected local sessions, model discovery and AI inference |
 | `pdfmanipulator/recipes.py` | Presets and saved workflow JSON |
-| `pdfmanipulator/layout.py` | Responsive thumbnail layout: six columns at 100%, fewer when zooming in |
+| `pdfmanipulator/layout.py` | Readable thumbnail columns, full-image aspect-ratio fitting, and filename-based preview tabs |
 | `pdfmanipulator/exports.py` | Safe, collision-free batch export naming |
 | `pdfmanipulator/previews.py` | Local thumbnail generation |
 | `pdfmanipulator/cli.py` | Command-line workflows |
